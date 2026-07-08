@@ -4,7 +4,19 @@
 
 ## 0. 读前导读（零基础也能跟上）
 
-> **读者假设**：你已会用 MyBatis 写 CRUD（05 章），但 SQL 慢、金额精度、事务隔离还似懂非懂。
+> **读者假设**：你已会用 MyBatis 写 CRUD（05 章），但 SQL 慢、金额精度、事务隔离还似懂非懂。  
+> **Go 路线读者**：若走 [Go 00 路线图](../Go/00-学习路线图与说明.md)，**本章学原理与 SQL**（索引/事务/EXPLAIN），**GORM 实操**见 [Go/07 GORM](../Go/07-GORM与MySQL实战.md)。不必学 MyBatis，Docker 启 MySQL 后可直接用 Go 连库。
+
+### 0.0 Go 路线学习分工
+
+| 内容 | 在本章（Java/06） | 在 Go/07 |
+|------|-------------------|----------|
+| B+ 树、最左前缀、隔离级别 | ✅ 精读 | 复习 + 面试口述 |
+| `CREATE TABLE`、JOIN、EXPLAIN | ✅ 手写 SQL 练习 | 表结构同步到 GORM Model |
+| MyBatis Mapper | ⏭ 跳过 | 用 GORM 替代 |
+| Spring 事务注解 | ⏭ 跳过 | `db.Transaction` 见 Go/07 |
+
+**推荐顺序**：Go 路线 **W2 读本章 §0～§15 + SQL 练习** → **W3 跟 Go/07 写 CRUD**。
 
 ### 0.1 用一句话弄懂本章
 
