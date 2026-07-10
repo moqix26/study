@@ -1,17 +1,32 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+)
 
-func Contains[T comparable](items []T, target T) bool {
-	for _, item := range items {
-		if item == target {
-			return true
-		}
-	}
-	return false
+type Account struct {
+	Owner   string
+	balance float64
 }
 
+func (a *Account) Deposit(amount float64) error {
+	if amount <= 0 {
+		return fmt.Errorf("invalid amount")
+	}
+	a.balance += amount
+	return nil
+}
+
+func (a *Account) Withdraw(amount float64) error {
+	if amount > a.balance {
+		return fmt.Errorf("insufficient funds")
+	}
+	a.balance -= amount
+	return nil
+}
+
+func (a Account) Balance() float64 { return a.balance }
+
 func main() {
-	fmt.Println(Contains([]int{1, 2, 3}, 2))
-	fmt.Println(Contains([]string{"go", "java"}, "go"))
+
 }
