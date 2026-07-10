@@ -1,0 +1,2 @@
+Go is great
+go is fun
