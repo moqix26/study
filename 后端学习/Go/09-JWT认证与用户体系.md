@@ -107,7 +107,7 @@ flowchart LR
 ```go
 import "golang.org/x/crypto/bcrypt"
 
-const bcryptCost = 12 // 生产 10～12；越高越慢越安全
+const bcryptCost = 12 // 示例值；生产要在目标机器压测后决定
 
 func HashPassword(plain string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(plain), bcryptCost)
@@ -120,6 +120,8 @@ func CheckPassword(hash, plain string) bool {
 ```
 
 **为何不用 MD5/SHA256？** 太快，彩虹表可破；bcrypt 自带 salt + 慢哈希。
+
+bcrypt cost 每增加 1，计算成本大约翻倍。不要机械规定“生产必须 12”，而应在目标机器 benchmark，让单次校验达到团队可接受的延迟（例如约 100～300ms），同时评估登录并发和 CPU。升级 cost 时可在用户成功登录后检测旧 hash cost，重新计算并更新。
 
 | 错误做法 | 后果 |
 |----------|------|
@@ -163,7 +165,9 @@ JWT = `Header.Payload.Signature`（Base64URL）
 ```go
 import (
 	"time"
+
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 type Claims struct {
@@ -174,8 +178,10 @@ type Claims struct {
 
 type JWTManager struct {
 	secret     []byte
-	accessTTL  time.Duration // 如 2h
-	refreshTTL time.Duration // 如 7d
+	issuer     string
+	audience   string
+	accessTTL  time.Duration // 常见 15～30min，按风险调整
+	refreshTTL time.Duration // 如 7～30d
 }
 
 func (m *JWTManager) IssueAccess(user *model.User) (string, error) {
@@ -183,9 +189,13 @@ func (m *JWTManager) IssueAccess(user *model.User) (string, error) {
 		UserID:   user.ID,
 		Username: user.Username,
 		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    m.issuer,
+			Audience:  jwt.ClaimStrings{m.audience},
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(m.accessTTL)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
 			Subject:   fmt.Sprintf("%d", user.ID),
+			ID:        uuid.NewString(), // jti，便于审计/撤销
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -213,11 +223,15 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (acc
 
 func (m *JWTManager) ParseAccess(tokenStr string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(t *jwt.Token) (interface{}, error) {
-		if t.Method != jwt.SigningMethodHS256 {
-			return nil, fmt.Errorf("unexpected method")
-		}
 		return m.secret, nil
-	})
+	},
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+		jwt.WithIssuer(m.issuer),
+		jwt.WithAudience(m.audience),
+		jwt.WithExpirationRequired(),
+		jwt.WithIssuedAt(),
+		jwt.WithLeeway(30*time.Second),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -228,6 +242,22 @@ func (m *JWTManager) ParseAccess(tokenStr string) (*Claims, error) {
 	return claims, nil
 }
 ```
+
+### 4.1 JWT 校验不能只验签名
+
+严格校验至少包含：
+
+| 项 | 原因 |
+|----|------|
+| 固定允许算法 | 防算法混淆，不能信任 token header 自己声明的任意算法 |
+| `exp` | 限制凭证生命周期 |
+| `nbf` / `iat` | 处理尚未生效和签发时间异常 |
+| `iss` | 确认由哪个认证服务签发 |
+| `aud` | 确认 token 是发给当前服务的 |
+| `sub` | 稳定的用户主体 ID |
+| `jti` | 唯一 token ID，用于审计、轮换或撤销 |
+
+JWT payload 只是 Base64URL 编码，**不是加密**。任何拿到 token 的人都能读取 claims，所以不要放密码、身份证号、密钥或不必要的隐私数据。
 
 ---
 
@@ -312,9 +342,36 @@ func (h *LinkHandler) Create(c *gin.Context) {
 
 ---
 
-## 7. Refresh Token 基础（口述即可）
+## 7. Refresh Token 与轮换 ⭐
 
-Access 短（2h）、Refresh 长（7d）。登录返回双 token；Access 过期用 Refresh 换新；登出删 Redis 中 `refresh:{jti}`。实习实现 Access + 中间件即可，详见 [08 Redis](./08-Redis与go-redis缓存实战.md)。
+Access Token 生命周期短，用于访问 API；Refresh Token 生命周期长，只发送给刷新接口。安全重点不是“再签一个更长 JWT”，而是**可撤销、可轮换、泄漏可检测**。
+
+推荐流程：
+
+1. 登录成功生成 Access Token 和高熵随机 Refresh Token。
+2. 只把 Refresh Token 的 SHA-256 摘要作为 key/记录存入 Redis 或数据库，保存 userID、sessionID、过期时间。
+3. 客户端刷新时，用原 token 计算摘要并原子取出旧记录。
+4. 旧 Refresh Token 立即失效，同时签发新 Access + 新 Refresh（rotation）。
+5. 如果一个已使用过的 Refresh Token 再次出现，可能已泄漏，应撤销整个 session/token family 并要求重新登录。
+
+生成 opaque token：
+
+```go
+func NewRefreshToken() (raw string, digest string, err error) {
+	b := make([]byte, 32) // 256 bit 随机数
+	if _, err = rand.Read(b); err != nil {
+		return "", "", err
+	}
+	raw = base64.RawURLEncoding.EncodeToString(b)
+	sum := sha256.Sum256([]byte(raw))
+	digest = hex.EncodeToString(sum[:])
+	return raw, digest, nil
+}
+```
+
+Redis 6.2+ 可用 `GETDEL` 实现“一次读取并删除”，再写入新 token；需要同时操作多条 session 信息时用 Lua 保证原子性。
+
+Refresh Token 也可以使用 JWT，但仍应保存 `jti`/session 状态以支持撤销和轮换；否则它只是一个更长寿、泄漏后危害更大的 bearer token。
 
 ---
 
@@ -327,6 +384,19 @@ Access 短（2h）、Refresh 长（7d）。登录返回双 token；Access 过期
 | 密码策略 | 长度 + 可选复杂度 |
 | 错误信息 | 登录统一「用户名或密码错误」 |
 | 退出 | 无状态 JWT 需黑名单或短 Access + Refresh |
+| 登录防爆破 | IP + 账号维度限流；失败次数和告警 |
+| Key 轮换 | token header 使用 `kid` 选择当前/旧 key，保留过渡期 |
+| 日志 | 不记录完整 Authorization、密码、Refresh Token |
+
+### 8.1 Header 与 Cookie 的取舍
+
+- `Authorization: Bearer` 常用于移动端、服务间调用和前端内存态；如果页面发生 XSS，恶意脚本仍可能代替用户发请求。
+- HttpOnly Cookie 可阻止 JavaScript 读取 token，但浏览器会自动携带 Cookie，因此必须考虑 SameSite、CSRF Token、Origin/Referer 校验。
+- 不要把长期 token 放在可被任意脚本读取的 localStorage 后就宣称“已经安全”；认证安全必须与 XSS、CSRF、CORS、HTTPS 一起设计。
+
+### 8.2 Key 轮换
+
+签发时在 header 放 `kid`，验证方按 `kid` 查允许的 key；发布新 key 后，新 token 用新 key 签发，旧 key 保留到旧 token 最长 TTL 结束。绝不能在验证失败时随意尝试用户提供的 URL 或从不可信位置下载 key。
 
 ---
 

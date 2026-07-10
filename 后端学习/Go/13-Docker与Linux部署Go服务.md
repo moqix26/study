@@ -3,7 +3,7 @@
 <!-- 修改说明: 2026-07-08 按 EXPANSION-STANDARD 扩充 §0、Dockerfile/compose 步骤表、逐行读、FAQ≥12、闭卷自测、费曼检验；交叉引用 Linux 12 章 -->
 
 > **文件编码**：UTF-8。  
-> **技术栈版本**：Go 1.22+、Docker Engine 26.x、Compose v2、MySQL 8.0、Redis 7。  
+> **技术栈版本**：Go 1.26.x、Compose v2、MySQL 8、Redis 7；镜像小版本应由项目定期升级并经过 CI 验证。
 > **关联章节**：
 > - [12 单元测试日志与配置工程化](./12-单元测试日志与配置工程化.md)（viper 配置、优雅停机）
 > - [11 短链服务项目实战（下）](./11-短链服务项目实战下.md)（待部署的 Go 短链服务）
@@ -118,7 +118,7 @@ flowchart TB
 ```dockerfile
 # syntax=docker/dockerfile:1
 
-FROM golang:1.22-alpine AS builder
+FROM golang:1.26-alpine AS builder
 WORKDIR /src
 RUN apk add --no-cache git ca-certificates
 COPY go.mod go.sum ./
@@ -141,7 +141,7 @@ ENTRYPOINT ["./shorturl", "-config", "config.yaml"]
 
 | 行号/指令 | 含义 | 改错会怎样 |
 |-----------|------|------------|
-| `golang:1.22-alpine AS builder` | 编译阶段，带完整工具链 | 版本与 go.mod 不一致可能编译失败 |
+| `golang:1.26-alpine AS builder` | 编译阶段，带完整工具链 | builder 版本低于 go.mod 要求会编译失败 |
 | `go mod download` 在 COPY 源码前 | 利用层缓存加速 rebuild | 先 COPY . 会导致改一行全量下载 |
 | `CGO_ENABLED=0` | 纯 Go 静态二进制 | 依赖 CGO 的库会 link 失败 |
 | `-ldflags="-s -w"` |  strip 符号减小体积 | 不影响运行，调试稍难 |

@@ -124,14 +124,42 @@ func NewDB(cfg Config) (*gorm.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	sqlDB, _ := db.DB()
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("get sql.DB: %w", err)
+	}
 	sqlDB.SetMaxOpenConns(50)
 	sqlDB.SetMaxIdleConns(10)
+	sqlDB.SetConnMaxLifetime(30 * time.Minute)
+	sqlDB.SetConnMaxIdleTime(5 * time.Minute)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := sqlDB.PingContext(ctx); err != nil {
+		return nil, fmt.Errorf("ping mysql: %w", err)
+	}
 	return db, nil
 }
 ```
 
 **DSN 要点**：`utf8mb4` 支持 emoji；`parseTime=True` 映射 `time.Time`；生产密码走环境变量。
+
+### 1.1 `*gorm.DB` 与 `*sql.DB` 分工
+
+- `*gorm.DB` 是查询构造、模型映射和回调层；`WithContext`、`Where` 等通常返回新的 session 句柄。
+- 底层 `*sql.DB` **不是一条连接**，而是并发安全的连接池。
+- 一次查询会从池中借连接，使用完归还；事务会在其生命周期内占用同一条连接。
+
+连接池参数不能照抄固定数字：
+
+| 参数 | 作用 | 设错的现象 |
+|------|------|------------|
+| `MaxOpenConns` | 最大打开连接数，0 表示不限制 | 太小请求排队；太大打爆 MySQL |
+| `MaxIdleConns` | 最大空闲连接数 | 太小频繁建连；太大闲置资源 |
+| `ConnMaxLifetime` | 连接最大总寿命 | 应小于数据库/代理强制断开周期并加抖动 |
+| `ConnMaxIdleTime` | 空闲多久后关闭 | 控制低峰期闲置连接 |
+
+运行中观察 `sqlDB.Stats()`：`OpenConnections`、`InUse`、`Idle`、`WaitCount`、`WaitDuration`。若 `WaitCount` 和等待时间持续上升，说明池成为瓶颈；先确认慢 SQL 和事务时长，再决定是否加连接。
 
 ---
 
@@ -197,7 +225,10 @@ func (r *UserRepository) GetByID(ctx context.Context, id int64) (*model.User, er
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
-	return &u, err
+	if err != nil {
+		return nil, fmt.Errorf("get user id=%d: %w", id, err)
+	}
+	return &u, nil
 }
 
 func (r *UserRepository) GetByUsername(ctx context.Context, name string) (*model.User, error) {
@@ -206,7 +237,10 @@ func (r *UserRepository) GetByUsername(ctx context.Context, name string) (*model
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
-	return &u, err
+	if err != nil {
+		return nil, fmt.Errorf("get user username=%q: %w", name, err)
+	}
+	return &u, nil
 }
 ```
 
@@ -222,6 +256,27 @@ func (r *UserRepository) List(ctx context.Context, page, size int) ([]model.User
 	return users, total, err
 }
 ```
+
+### 4.2 深分页：Offset 为什么越往后越慢
+
+`OFFSET 100000 LIMIT 20` 往往仍需扫描/跳过大量索引记录。列表页很深或数据持续增长时，优先使用基于稳定排序键的 cursor/keyset pagination：
+
+```go
+func (r *UserRepository) ListAfterID(ctx context.Context, afterID int64, size int) ([]model.User, error) {
+	if size <= 0 || size > 100 {
+		size = 20
+	}
+	var users []model.User
+	q := r.db.WithContext(ctx).Order("id DESC").Limit(size)
+	if afterID > 0 {
+		q = q.Where("id < ?", afterID)
+	}
+	err := q.Find(&users).Error
+	return users, err
+}
+```
+
+第一页传 `afterID=0`，下一页传上一页最后一条的 ID。复合排序如 `created_at DESC, id DESC` 必须用同样的复合条件和索引，`id` 用于打破时间相同的并列。
 
 ---
 
@@ -260,6 +315,40 @@ func (r *UserRepository) CreateWithProfile(ctx context.Context, u *model.User, b
 ```
 
 对照 [Java 06 事务](../Java/06-MySQL基础索引与事务.md)：**要么全成功要么全撤销**；Go 里 return error 即回滚。
+
+### 6.1 事务边界怎么划
+
+事务应覆盖“必须原子完成的数据库操作”，不要把以下慢操作包在事务中：外部 HTTP、Redis、发送 MQ、文件上传、等待用户输入。事务越长，连接占用和锁持有越久，死锁与超时概率越高。
+
+如果数据库提交成功后还要发消息，可用 Outbox：在同一事务写业务表和 outbox 表，后台可靠投递；不要假设“先提交 DB，再发 MQ”天然原子。
+
+### 6.2 隔离级别与锁
+
+GORM 最终使用 `database/sql`，需要时可指定事务选项：
+
+```go
+err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	// 查询和更新都必须使用 tx，而不是外层 db。
+	return tx.Model(&model.ShortLink{}).
+		Where("id = ?", id).
+		UpdateColumn("click_count", gorm.Expr("click_count + 1")).Error
+}, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+```
+
+隔离级别不是越高越好：更强隔离通常意味着更高冲突成本。先根据业务不变量选择，再结合索引和锁范围验证。重试死锁时，整个事务函数必须可安全重放，并加入次数上限和随机退避。
+
+### 6.3 避免“先读再写”的丢失更新
+
+错误模式：读出 `ClickCount`，在 Go 中 `+1`，再 Save；两个并发请求可能都从 10 写成 11。使用数据库原子表达式：
+
+```go
+err := db.WithContext(ctx).
+	Model(&model.ShortLink{}).
+	Where("id = ?", id).
+	UpdateColumn("click_count", gorm.Expr("click_count + 1")).Error
+```
+
+若更新依赖旧状态，可用乐观锁版本号：`WHERE id=? AND version=?`，并检查 `RowsAffected` 是否为 1。
 
 ```mermaid
 sequenceDiagram

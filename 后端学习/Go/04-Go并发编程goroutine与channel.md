@@ -184,6 +184,49 @@ func producer(out chan<- int) { out <- 1 }
 func consumer(in <-chan int)   { <-in }
 ```
 
+### 2.6 nil channel、关闭语义与内部结构 ⭐
+
+先记操作矩阵：
+
+| channel 状态 | 接收 | 发送 | 关闭 |
+|--------------|------|------|------|
+| `nil` | 永久阻塞 | 永久阻塞 | panic |
+| 非 nil、未关闭 | 无数据时阻塞 | 无接收者/缓冲满时阻塞 | 成功 |
+| 已关闭 | 缓冲读完后立刻返回零值，`ok=false` | panic | 再次关闭 panic |
+
+nil channel 在 `select` 中对应 case 永远不会就绪，因此可以用“把 channel 设为 nil”动态禁用某个分支：
+
+```go
+for left != nil || right != nil {
+	select {
+	case v, ok := <-left:
+		if !ok {
+			left = nil // 禁用该 case，避免反复读零值
+			continue
+		}
+		_ = v
+	case v, ok := <-right:
+		if !ok {
+			right = nil
+			continue
+		}
+		_ = v
+	}
+}
+```
+
+从实现思路看，runtime 中的 channel（常称 `hchan`）大致需要维护：环形缓冲区、当前元素数、发送/接收位置、关闭标志、一把互斥锁，以及等待发送和等待接收的 goroutine 队列。等待节点常称 `sudog`，它把 goroutine 与本次等待关联起来。
+
+发送时通常按以下路径处理：
+
+1. 已有等待接收者：直接把值交给对方并唤醒。
+2. 没有接收者但缓冲未满：写入环形缓冲区。
+3. 缓冲已满或无缓冲：当前 goroutine 进入发送等待队列并被挂起。
+
+接收过程对称。`close` 会设置关闭标志并唤醒相关等待者；等待发送者醒来后会因“向已关闭 channel 发送”而 panic。
+
+这些字段是 runtime 实现细节，可能随 Go 版本变化；业务代码应依赖语言语义，不应通过 `unsafe` 读取 `hchan`。
+
 ---
 
 ## 3. select
@@ -202,6 +245,22 @@ default:
 ```
 
 **术语（select）**：多 channel **多路复用**；多个 case 就绪时 **随机** 选一个。
+
+循环中不要反复 `time.After` 创建新 timer：
+
+```go
+timer := time.NewTimer(time.Second)
+defer timer.Stop()
+
+select {
+case v := <-ch:
+	fmt.Println(v)
+case <-timer.C:
+	return context.DeadlineExceeded
+}
+```
+
+一次性超时用 `time.After` 很方便；高频循环里应复用 `Timer` 或 `Ticker`，避免持续分配 timer、增加 GC 和调度压力。Go 1.23+ 改进了未引用 timer/ticker 的回收，但“可回收”不等于“零成本”。
 
 ---
 
@@ -236,7 +295,24 @@ for i := 0; i < 3; i++ {
 wg.Wait()
 ```
 
-**注意**：`Add` 在 goroutine 外或 goroutine 内第一行；**Done 配对 Add**。
+**注意**：传统写法必须在启动 goroutine **之前**调用 `Add`，否则 `Wait` 可能先看到计数为 0 并提前返回；goroutine 内只负责 `defer Done()`。**Done 必须与 Add 配对**。
+
+Go 1.25+ 还提供 `WaitGroup.Go`：
+
+```go
+var wg sync.WaitGroup
+for i := 0; i < 3; i++ {
+	id := i
+	wg.Go(func() {
+		work(id)
+	})
+}
+wg.Wait()
+```
+
+阅读公司旧项目时仍会大量看到 `Add/Done`，两种写法都要会。
+
+`WaitGroup.Go` 要求传入函数不能 panic；可能 panic 的任务应在任务内部按业务语义恢复、转为 error，或继续使用能显式收集错误的并发组织方式。
 
 ### 4.3 sync.Once
 
@@ -248,6 +324,42 @@ once.Do(func() { /* init singleton */ })
 ### 4.4 sync.Map
 
 并发 map；**读多写少** 或 key 稳定时考虑，否则 **Mutex + map** 更清晰。
+
+### 4.5 atomic：只适合单变量状态
+
+```go
+var requests atomic.Int64
+requests.Add(1)
+fmt.Println(requests.Load())
+```
+
+原子操作适合计数器、状态位、指针替换；如果一次业务更新涉及多个字段并要求整体不变量，使用 Mutex 更容易证明正确。不要把一组“各自原子”的字段误认为整体事务。
+
+### 4.6 sync.Cond：等待“条件成立”
+
+`sync.Cond` 适合多个 goroutine 等待某个共享状态改变。调用 `Wait` 前必须持锁；`Wait` 会原子地释放锁并休眠，醒来后重新加锁。条件必须用 `for` 重查：
+
+```go
+mu := sync.Mutex{}
+cond := sync.NewCond(&mu)
+ready := false
+
+go func() {
+	mu.Lock()
+	for !ready {
+		cond.Wait()
+	}
+	mu.Unlock()
+	work(1)
+}()
+
+mu.Lock()
+ready = true
+mu.Unlock()
+cond.Broadcast()
+```
+
+很多队列场景用 channel 更自然；当条件不是“一次消息”，而是复杂共享状态时 `Cond` 才更合适。
 
 ---
 
@@ -275,6 +387,31 @@ case result := <-work():
 | `WithValue` | 传 request-scoped 值（trace id）；**勿滥用** |
 
 HTTP 服务器：`r.Context()` 传递取消信号。
+
+### 5.1 context 的传播规则与常见误用
+
+context 形成父子树：父 context 被取消，所有子 context 都会收到取消；取消子节点不会影响父节点和兄弟节点。
+
+```go
+func Handle(ctx context.Context, id int64) error {
+	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+
+	user, err := repo.FindByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("find user: %w", err)
+	}
+	return cache.Set(ctx, user)
+}
+```
+
+规范：
+
+- 作为函数第一个参数传递，通常命名为 `ctx`；不要塞进 struct 作为长期字段。
+- 不传 `nil`；不知道用什么时用 `context.Background()`，测试可用 `context.TODO()` 暂占。
+- `WithValue` 只放跨 API 边界的 request-scoped 元数据，如 trace ID；业务参数仍应显式传参。
+- 派生了 cancel 函数就尽早 `defer cancel()`，用于释放 timer 和父子关联资源。
+- 下游必须真的接收并检查 ctx；只在 handler 创建 context、DAO 却不用它，取消链不会生效。
 
 ---
 
@@ -309,9 +446,35 @@ go run -race .
 go test -race ./...
 ```
 
-**DATA RACE**：多 goroutine 并发读写同一变量且至少一方无同步 → **未定义行为**。
+**DATA RACE**：两个 goroutine 并发访问同一内存位置，至少一个是写，并且访问之间没有建立同步关系。出现竞态后程序结果不可靠，也可能被编译器和 CPU 重排影响；除少数底层原语外，应把 race detector 报告视为必须修复的问题。
 
 修复：Mutex、channel、atomic。
+
+### 7.1 happens-before：同步为什么能让另一个 goroutine“看见”写入 ⭐
+
+“没有同时执行”还不够；并发正确性依赖 Go 内存模型规定的 happens-before（先行发生）关系。常用保证：
+
+- goroutine 启动语句先行发生于新 goroutine 开始执行。
+- channel 的一次发送先行发生于对应接收完成。
+- 关闭 channel 先行发生于接收方因关闭而返回零值。
+- `Mutex.Unlock` 先行发生于之后成功取得同一锁的 `Lock`。
+- `Once.Do(f)` 中 `f` 返回，先行发生于任意一次 `Do` 返回。
+- `sync/atomic` 原子操作提供明确的同步语义；不要与普通无锁读写混用来“碰运气”。
+
+```go
+var msg string
+done := make(chan struct{})
+
+go func() {
+	msg = "ready"
+	close(done)
+}()
+
+<-done
+fmt.Println(msg) // close/receive 建立同步，因此能观察到 ready
+```
+
+反例：用 `time.Sleep` 等待另一个 goroutine 写变量，不建立同步关系；机器快慢一变就可能失败，并且仍会被 `-race` 报告。
 
 ---
 
@@ -337,6 +500,22 @@ flowchart LR
 | 调度 | M 必须持 P 才能跑 G；IO 阻塞时 G 与 M 分离，M 可找别的 G |
 
 **口述模板**：Go 是 **M:N 调度**；`GOMAXPROCS` 默认 CPU 核数；网络 IO 用 **netpoller**  epoll/kqueue 避免线程阻塞（关联 [Linux epoll](../Linux/) 与 OS 八股）。
+
+### 8.1 调度器如何找到工作
+
+可以按以下顺序理解，不必死背 runtime 私有函数名：
+
+1. 每个 P 有本地运行队列，优先从本地取 G，减少全局锁竞争。
+2. 本地没有任务时，会检查全局队列、网络轮询器和定时器。
+3. 仍无任务时可能从其他 P 的本地队列“偷”一部分 G（work stealing）。
+4. goroutine 做可轮询网络 IO 时，runtime 把等待交给 netpoller，M 可以继续运行别的 G。
+5. goroutine 进入阻塞系统调用时，runtime 可让 P 与该 M 分离，交给其他 M 继续执行可运行 G。
+
+Go 支持异步抢占，长时间运行的 goroutine 通常也能被调度器打断；但没有函数调用、包含 cgo 或处在某些 runtime 临界区时，调度与停顿表现仍可能不同。业务上不要写永不退出的纯忙等循环，应使用阻塞原语或显式检查取消信号。
+
+### 8.2 GOMAXPROCS 不等于 goroutine 数
+
+`GOMAXPROCS` 控制同时执行 Go 代码所需的 P 数量，不限制 goroutine 总数。CPU 密集任务增加 goroutine 超过 P 数量不会凭空增加算力；IO 密集任务可以有更多 goroutine，因为大量任务处在等待状态。
 
 ---
 
@@ -399,8 +578,8 @@ func main() {
 | channel send 无人收 | 阻塞 forever | 确保 consumer；用 context 取消 |
 | channel recv 无人发 | 阻塞 | 关闭 channel；超时 |
 | WaitGroup 少 Done | 永久 Wait | defer Done；配对 Add |
-| 定时器未 Stop | `time.After` 泄漏 | 用 `time.NewTimer` + Stop |
-| HTTP body 未读未关 | 连接泄漏 | defer Body.Close() |
+| 高频循环反复建 timer | 分配和调度压力 | 复用 `time.NewTimer/Ticker` 并 Stop |
+| HTTP body 未关 | 连接泄漏/无法复用 | `defer Body.Close()`；按需读完 |
 
 排查：**pprof goroutine**（进阶）。
 
@@ -418,7 +597,7 @@ func main() {
 | 6 | WaitGroup 负数 | Done 过多 | Add/Done 配对 |
 | 7 | 泄漏 goroutine 增多 | 阻塞 channel | context 超时退出 |
 | 8 | select 饥饿 | 某 case 总就绪 | 拆分逻辑；公平性通常可接受 |
-| 9 | 闭包捕获循环变量 | 经典 bug | `go func(i int){}(i)` |
+| 9 | 循环变量捕获与版本差异 | Go 1.22+ 的新式 `for/range` 每轮变量独立；旧模块或循环外声明变量仍可能踩坑 | 显式传参最清晰：`go func(i int){}(i)` |
 | 10 | ctx 未 cancel | 资源泄漏 | defer cancel() |
 
 ---

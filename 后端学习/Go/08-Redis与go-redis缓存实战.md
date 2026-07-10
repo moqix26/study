@@ -138,7 +138,7 @@ lock:create_link:{uid}→ 分布式锁
 rl:ip:{ip}            → 限流计数（11 章）
 ```
 
-规则：业务前缀 + 冒号 +  id；**必须设 TTL**（除计数器类可长期）。
+规则：业务前缀 + 冒号 + id。**缓存类 key 默认应有 TTL**；确实代表持久状态的集合、配置或幂等记录要单独设计生命周期，不能机械给所有 key 同一个过期时间。
 
 ---
 
@@ -183,11 +183,33 @@ func (s *LinkService) UpdateURL(ctx context.Context, code, newURL string) error 
 		return err
 	}
 	key := linkKeyPrefix + code
-	return s.rdb.Del(ctx, key).Err() // 删而非改
+	if err := s.rdb.Del(ctx, key).Err(); err != nil {
+		// DB 已成功，不能简单告诉客户端“整个更新失败”并诱导盲目重试。
+		// 记录指标/日志，并把失效任务写入可靠重试队列或 outbox。
+		log.Printf("invalidate link cache code=%s: %v", code, err) // 项目中换成结构化日志
+	}
+	return nil
 }
 ```
 
 **为何 DEL 不是 SET？** 避免并发下旧值覆盖新值；与 [Java 07 Cache Aside](../Java/07-Redis核心原理与缓存实战.md) 一致。
+
+### 4.1 Cache Aside 仍可能出现短暂旧值
+
+典型竞态：
+
+1. 请求 A 缓存 miss，读到 DB 旧值。
+2. 请求 B 更新 DB，并删除缓存。
+3. 请求 A 最后把旧值写回缓存。
+
+对策按业务成本选择：
+
+- 短链映射尽量设计为**创建后不可修改**，修改时生成新短码，直接消除最难的一致性路径。
+- 回填缓存前携带版本号，Lua 比较版本，只允许新版本覆盖旧版本。
+- 更新后做延迟二次删除，用于降低上述窗口，但它仍不是数学意义的强一致。
+- 对一致性要求更高的场景使用消息/outbox 驱动失效，或直接绕过缓存读取主库。
+
+缓存是副本，数据库才是 source of truth。要先明确业务能容忍多久的旧值，再选择方案。
 
 ```mermaid
 sequenceDiagram
@@ -249,10 +271,45 @@ if ok {
 	defer c.rdb.Del(ctx, lockKey)
 	// 查 DB + SET
 } else {
-	time.Sleep(50 * time.Millisecond)
-	return c.GetOriginalURL(ctx, code) // 重试
+	select {
+	case <-time.After(50 * time.Millisecond):
+		return c.GetOriginalURL(ctx, code) // 示例；生产要限制总重试次数
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
 }
 ```
+
+### 6.3 单机先用 `singleflight` 合并重复回源
+
+同一个 Go 实例内，`golang.org/x/sync/singleflight` 可以让相同 key 的并发 miss 只执行一次查询：
+
+```go
+type LinkCache struct {
+	rdb  *redis.Client
+	repo *repository.LinkRepository
+	load singleflight.Group
+}
+
+func (c *LinkCache) loadFromDB(ctx context.Context, code string) (string, error) {
+	v, err, _ := c.load.Do(code, func() (any, error) {
+		link, err := c.repo.GetByShortCode(ctx, code)
+		if err != nil {
+			return "", err
+		}
+		if link == nil {
+			return "", ErrNotFound
+		}
+		return link.OriginalURL, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return v.(string), nil
+}
+```
+
+它只合并**当前进程**的请求，多实例仍可能同时回源。很多业务先用 singleflight + 随机 TTL 就足够；不要一上来就为普通缓存 miss 引入复杂分布式锁。
 
 ---
 
@@ -268,13 +325,40 @@ func WithLock(ctx context.Context, rdb *redis.Client, key string, ttl time.Durat
 	defer func() {
 		// Lua：只删自己的 token
 		script := `if redis.call("get",KEYS[1])==ARGV[1] then return redis.call("del",KEYS[1]) else return 0 end`
-		rdb.Eval(ctx, script, []string{key}, token)
+		releaseCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = rdb.Eval(releaseCtx, script, []string{key}, token).Err()
 	}()
 	return fn()
 }
 ```
 
-生产可用 [redsync](https://github.com/go-redsync/redsync)；面试说清 SETNX + 唯一 value + Lua 释放即可。
+面试至少说清以下边界：
+
+1. `SET key token NX PX ttl` 必须一次完成；`SetNX(..., ttl)` 已表达该语义。
+2. value 必须唯一，释放时 Lua“比较 token 后删除”，不能直接 `DEL` 别人的锁。
+3. 临界区执行时间超过 TTL 时锁会提前失效；需要合理上限、续期，或让任务天然幂等。
+4. Redis 故障转移和网络分区下，普通锁不能自动变成严格一致的分布式互斥。
+5. 对扣款、库存等正确性敏感场景，应使用数据库约束/事务、幂等键或 fencing token，不能只靠“拿到 Redis 锁”。
+
+库可以减少实现错误，但不能替你定义故障语义。
+
+### 7.1 Pipeline、事务与 Lua 的区别
+
+```go
+pipe := rdb.Pipeline()
+pipe.Incr(ctx, "stats:clicks")
+pipe.Expire(ctx, "stats:clicks", 24*time.Hour)
+_, err := pipe.Exec(ctx)
+```
+
+| 工具 | 核心能力 | 是否原子 |
+|------|----------|----------|
+| Pipeline | 批量发送，减少网络 RTT | 否，其他命令可穿插 |
+| `TxPipeline` / MULTI EXEC | 一组命令顺序执行，中间不被其他客户端命令插入 | 是，但不支持读取结果后再决定后续命令 |
+| Lua | 在 Redis 内执行“读 → 判断 → 写” | 脚本执行期间原子 |
+
+不要把 Pipeline 当事务。释放锁、限流等依赖“检查后修改”的逻辑通常用 Lua。
 
 ---
 

@@ -139,6 +139,20 @@ http.ListenAndServe(":8080", mux)
 
 默认 `DefaultServeMux` 即 `http.HandleFunc` 注册的全局 mux。
 
+Go 1.22+ 的 `ServeMux` 支持“方法 + 路径参数”模式：
+
+```go
+mux := http.NewServeMux()
+
+mux.HandleFunc("GET /health", healthHandler)
+mux.HandleFunc("GET /users/{id}", func(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	fmt.Fprintln(w, id)
+})
+```
+
+这让小型服务不依赖第三方路由也能表达 405 和路径参数；Gin 仍提供更完整的绑定、校验、中间件和生态。
+
 ### 1.3 ResponseWriter 与 Request
 
 ```go
@@ -162,6 +176,36 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 | `w.Header().Set` | 响应头 |
 | `w.WriteHeader` | 状态码（只能一次） |
 | `w.Write` | 响应体 |
+
+### 1.4 生产级 `http.Server`：超时必须显式配置 ⭐
+
+直接调用 `http.ListenAndServe` 使用的默认 Server 几乎没有业务超时限制。公网服务应显式创建：
+
+```go
+srv := &http.Server{
+	Addr:              ":8080",
+	Handler:           mux,
+	ReadHeaderTimeout: 3 * time.Second,
+	ReadTimeout:       10 * time.Second,
+	WriteTimeout:      15 * time.Second,
+	IdleTimeout:       60 * time.Second,
+	MaxHeaderBytes:    1 << 20, // 1 MiB
+}
+
+if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	log.Fatal(err)
+}
+```
+
+| 配置 | 防什么 | 注意 |
+|------|--------|------|
+| `ReadHeaderTimeout` | 客户端慢慢发送 header 占连接（Slowloris） | 通常最应设置 |
+| `ReadTimeout` | 整个请求读取过慢 | 大文件上传需单独设计 |
+| `WriteTimeout` | handler/响应长期不结束 | SSE/流式响应不能照搬短超时 |
+| `IdleTimeout` | Keep-Alive 空闲连接长期占用 | 应大于普通请求耗时 |
+| `MaxHeaderBytes` | 超大 header | 仍需限制业务字段和 body |
+
+超时没有万能数值，应按接口类型区分：普通 JSON API、文件上传、SSE 的合理配置不同。超时触发后还要让下游 DB/Redis/HTTP 调用使用 `r.Context()`，否则 handler 返回了，下游工作仍可能继续。
 
 ---
 
@@ -188,16 +232,25 @@ func echoHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	defer r.Body.Close()
+	// 服务端会在请求结束后关闭 Body；这里重点限制读取大小。
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 最大 1 MiB
 
 	var req EchoRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		http.Error(w, "body must contain one JSON value", http.StatusBadRequest)
 		return
 	}
 	resp := EchoResponse{Code: 0, Data: req.Message}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("encode response: %v", err)
+	}
 }
 
 func main() {
@@ -248,8 +301,17 @@ err = json.Unmarshal(data, &u)
 ## 4. http.Client
 
 ```go
+transport := &http.Transport{
+	MaxIdleConns:          100,
+	MaxIdleConnsPerHost:   20,
+	IdleConnTimeout:       90 * time.Second,
+	TLSHandshakeTimeout:   5 * time.Second,
+	ResponseHeaderTimeout: 5 * time.Second,
+}
+
 client := &http.Client{
-	Timeout: 10 * time.Second,
+	Transport: transport,
+	Timeout:   10 * time.Second, // 包括连接、重定向和读取响应体
 }
 
 ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -262,8 +324,42 @@ if err != nil {
 }
 defer resp.Body.Close()
 
-body, err := io.ReadAll(resp.Body)
+body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 最多读取 2 MiB
 ```
+
+### 4.1 Client/Transport 必须复用
+
+`http.Client` 和 `http.Transport` 可以安全并发使用，应作为长期对象复用。每个请求都 `&http.Client{}` 会浪费连接池，导致重复 TCP/TLS 握手和端口压力。
+
+响应体需要关闭。若希望连接复用，通常还要把 body 读到 EOF；对于不可信的大响应，应先设置读取上限或主动放弃复用，不能为了复用无限制 `io.Copy`。
+
+### 4.2 状态码不是网络错误
+
+`client.Do` 在收到 HTTP 404/500 时通常 `err == nil`，因为网络交互本身成功；业务必须检查状态码：
+
+```go
+if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	msg, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+	return fmt.Errorf("upstream status=%d body=%q", resp.StatusCode, msg)
+}
+```
+
+日志中不要原样记录可能含密钥、Cookie 或个人信息的响应体。
+
+### 4.3 SSRF：后端不能盲目请求用户给的 URL ⭐
+
+如果短链项目增加“抓取网页标题/预览图”，服务端会主动请求用户 URL，必须防 SSRF：攻击者可能让服务访问 `127.0.0.1`、云元数据地址、内网 MySQL/Redis 或通过重定向绕过首次检查。
+
+最低防线：
+
+1. 只允许 `http/https`，拒绝 `file://`、`gopher://` 等协议。
+2. 解析主机并检查所有解析出的 IP，拒绝 loopback、private、link-local、multicast、unspecified。
+3. 自定义 `DialContext` 在真正连接前再次校验解析结果，防 DNS rebinding。
+4. `CheckRedirect` 对每次重定向后的目标重复校验，并限制跳转次数。
+5. 设置连接、响应头、总超时和响应体大小上限。
+6. 生产环境配合出站网络策略；应用层校验不能替代网络隔离。
+
+仅校验字符串是否以 `http` 开头完全不够；`http://127.0.0.1` 本身就是合法 HTTP URL。
 
 **关联计网**：[计算机网络](../../前端学习/计算机网络/) — Keep-Alive、TLS、DNS。
 
