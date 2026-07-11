@@ -23,9 +23,19 @@
 | 邮局回执「已签收 / 查无此人」 | **状态码** 200 / 404 / 500 |
 | 挂号信必须走可靠通道 | 跑在 **TCP** 上（02 章） |
 
-**Go 视角**：`curl` 和 `net/http` 发同一套格式；Go 05 的 `Handler`、`Request`、`ResponseWriter` 就是读写这些字段。
+### 0.1.1 本章还会出现的词
 
-### 0.2 你需要提前知道什么
+| 词 | 是什么 |
+|----|--------|
+| **REST** | Representational State Transfer，用 URL 表资源、HTTP 方法表操作的 API 设计风格 |
+| **CRUD** | Create / Read / Update / Delete，增删改查 |
+| **幂等** | 同一操作执行 1 次和 N 次，资源最终状态相同（GET/PUT/DELETE 通常幂等，POST 创建通常不幂等） |
+| **Bearer** | HTTP 认证方案名，写在 `Authorization: Bearer <token>` 里，意为「持票人凭此 token 通行」 |
+| **Keep-Alive** | HTTP 长连接，同一 TCP 连接上连续发多个请求，省掉反复握手 |
+| **队头阻塞** | 前一个响应没传完，后面的请求必须排队等（HTTP/1.1 常见问题） |
+| **httpbin.org** | 公开的 HTTP 测试网站，会把你发的请求原样回显，适合练 curl |
+
+---
 
 | 前置 | 章节 | 必须？ |
 |------|------|--------|
@@ -445,6 +455,12 @@ func getUserHandler(w http.ResponseWriter, r *http.Request) {
 对照 §2：`WriteHeader(200)` → 状态行；`Header().Set` → 响应头；`Encode` → Body。
 
 ### 10.1 多栈对照：浏览器 fetch / Java Spring / Python Flask
+
+| 名词 | 是什么 |
+|------|--------|
+| **fetch** | 浏览器里用 JavaScript 发 HTTP 请求的 API |
+| **Spring Boot** | Java 最常用的 Web 框架，用注解注册路由 |
+| **Flask** | Python 的轻量 Web 框架 |
 
 HTTP 报文格式与语言无关；下表是**同一 REST 语义**在不同栈的写法：
 

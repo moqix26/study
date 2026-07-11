@@ -28,6 +28,15 @@
 
 **HTTP 与 TCP**：HTTP 是**信纸格式**（应用层）；TCP 是**打电话线路**（传输层）。`curl http://localhost:8080/health` 之前，必须先「拨通」`8080`。
 
+**本章还会出现的词**
+
+| 词 | 是什么 |
+|----|--------|
+| **Socket** | 操作系统提供的网络编程接口；`ListenAndServe` 底层就是在某个端口上 listen |
+| **bind（绑定）** | 进程向系统声明「我要占用这个端口」；报错 `address already in use` 就是端口已被别人 bind |
+| **Handler** | 收到 HTTP 请求后执行业务逻辑的函数（Go 里 `func(w, r)`） |
+| **REST API** | 用 URL+HTTP 方法设计的接口风格，Go 后端几乎都用 TCP 传 JSON |
+
 ### 0.2 你需要提前知道什么
 
 | 前置 | 对应章节 | 必须？ |
@@ -119,6 +128,8 @@ flowchart TB
 | 典型应用 | HTTP、WebSocket、MySQL | DNS、直播、QUIC |
 | Go 后端 | **几乎所有 REST API** | DNS 53 等 |
 
+> **上表名词脚注**：**REST** = 用 URL+HTTP 方法设计的 API 风格；**WebSocket** = 浏览器与服务器的长连接实时通信；**QUIC** = 基于 UDP 的新一代传输协议（HTTP/3 用它）；**MySQL** = 关系型数据库，默认端口 3306。
+
 **口诀**：要完整、按序、不丢 → TCP；要快、能忍丢包 → UDP。
 
 ---
@@ -192,7 +203,7 @@ sequenceDiagram
     S->>C: ② ACK（可能还有数据要发）
     S->>C: ③ FIN
     C->>S: ④ ACK
-    Note over C: TIME_WAIT 2MSL
+    Note over C: TIME_WAIT 2MSL（见 §6.2）
 ```
 
 | 步骤 | 包 | 含义 |
@@ -208,10 +219,10 @@ sequenceDiagram
 
 ### 6.2 TIME_WAIT 简要
 
-主动关闭方发完最后 ACK 后进入 **TIME_WAIT**（约 1～4 分钟）：
+主动关闭方发完最后 ACK 后进入 **TIME_WAIT**（约 1～4 分钟），要等 **2MSL** 再释放端口：
 
-1. 确保最后 ACK 能到达（丢了对方能重发 FIN）
-2. 让旧连接迟到包消亡，不影响同四元组新连接
+- **MSL（Maximum Segment Lifetime，报文最大生存时间）**：TCP 认为一个包在网络里最多能存活的时间（常按 1～2 分钟估算）
+- **2MSL**：多等两倍 MSL，① 确保最后 ACK 能到达；② 让旧连接的迟到包消亡，不影响同四元组的新连接
 
 频繁 `curl` 短连接可能看到大量 `TIME_WAIT`，开发环境**一般正常**。
 
@@ -344,7 +355,7 @@ Go 只是监听 8080 的一种方式；**「端口被占」是 OS 级问题**，
 1. `localhost` → `127.0.0.1`（DNS，见 [03 章](./03-IP地址与DNS解析.md) 选修）
 2. **TCP 三次握手**：临时端口 ↔ 8080
 3. **HTTP 请求**在已建连接上发送
-4. Go `net/http` 读 Socket → 解析 HTTP → 调 Handler
+4. Go `net/http` 读 Socket → 解析 HTTP → 调 **Handler（请求处理函数，你写的业务逻辑）**
 5. JSON 经 TCP 返回；连接 keep-alive 或四次挥手
 
 ---

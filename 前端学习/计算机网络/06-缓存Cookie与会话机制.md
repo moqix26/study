@@ -11,7 +11,20 @@
 
 ### 0.1 用一句话弄懂本章
 
-**一句话**：浏览器和 CDN 会**记住**看过的响应（**缓存**）；服务器用 **Cookie** 让浏览器自动出示「会员手环」，前后端分离 API 常用 **JWT + Authorization 头**；**CORS** 是浏览器保安——**curl 没有保安，所以 curl 从不报 CORS 错**。
+**一句话**：浏览器和 **CDN（Content Delivery Network，内容分发网络）** 会**记住**看过的响应（**缓存**）；服务器用 **Cookie（浏览器存的小纸条）** 让浏览器自动出示「会员手环」，前后端分离 API 常用 **JWT（JSON Web Token，登录令牌）** + `Authorization` 头；**CORS（Cross-Origin Resource Sharing，跨域资源共享）** 是浏览器保安——**curl 没有保安，所以 curl 从不报 CORS 错**。
+
+**本章还会出现的词（先混个脸熟）**
+
+| 词 | 是什么 |
+|----|--------|
+| **Gin** | Go 语言的 Web 框架，类似 Java 的 Spring Boot，用来写 HTTP API |
+| **Nginx** | 常用 Web 服务器/反向代理，生产环境常在 443 端口接 HTTPS，再转发给 Go |
+| **Redis** | 内存数据库；Session 方案里把「sessionId → 用户信息」存在 Redis |
+| **ETag** | 响应头的「内容指纹」，用来判断文件有没有变，没变就回 304 |
+| **OPTIONS** | HTTP 方法之一；CORS 预检时浏览器先发 OPTIONS「问能不能跨域」 |
+| **immutable** | `Cache-Control` 指令，意为「缓存期内内容不会变，刷新也不必重新验证」 |
+| **hash（文件名里）** | 文件内容的缩写指纹，内容一变文件名就变，方便浏览器永远用新文件 |
+| **credentials** | fetch 选项：`credentials: 'include'` 表示「请求时自动带上 Cookie」 |
 
 **核心类比表**
 
@@ -21,7 +34,7 @@
 | **协商缓存（304）** | 过期后**打电话问**「还是昨天那批吗？」 | 你用 `ETag` 判断，未变则 304 无 body |
 | **CDN** | 连锁便利店在各小区设分店 | 静态资源走 CDN 域名，API 默认 `no-store` |
 | **Cookie** | 健身房**手环**，进门自动识别 | `Set-Cookie` 响应头；`net/http` / Gin 设置 |
-| **Session** | 前台**登记簿**（服务端 Redis） | 手环只存 `sessionId`，状态在 Redis |
+| **Session** | 前台**登记簿**（服务端 Redis） | 手环只存 `sessionId`，用户信息在 Redis 里 |
 | **JWT Token** | 自带信息的**电子票** | `Authorization: Bearer`，见 [Go 09](../../后端学习/Go/09-JWT认证与用户体系.md) |
 | **CORS** | 浏览器保安：别的域 JS **不许读**响应 | Gin `cors` 中间件声明 `Allow-Origin` |
 | **curl** | 没有保安的**快递员** | 直连 `localhost:8080`，跨域也不拦 |
@@ -115,7 +128,7 @@ flowchart TB
 
 ### 1.1 缓存解决什么问题
 
-浏览器、CDN、反向代理（Nginx）都会缓存 HTTP 响应：
+浏览器、CDN、**反向代理（Reverse Proxy，反代）**——常见软件叫 **Nginx**（读作「Engine-X」，一款 Web 服务器）——都会缓存 HTTP 响应：
 
 - **减少重复下载**：同一份 `app.[hash].js`、同一张 logo 不必每次回源
 - **降低延迟**：边缘节点或本地磁盘比跨城回源快几个数量级
@@ -209,7 +222,7 @@ Expires: Wed, 21 Oct 2026 07:28:00 GMT
 | `no-store` | **不存**任何缓存 | 登录、用户信息、支付 |
 | `private` | 仅浏览器可缓存，CDN 不应缓存 | 含用户信息的页面 |
 | `public` | 浏览器和 CDN 都可缓存 | 公共静态资源 |
-| `immutable` | 缓存期内不必因刷新重新验证 | `app.[hash].js` |
+| `immutable` | **不可变**：缓存期内内容不会变，刷新也不必重新验证 | `app.[hash].js` |
 | `must-revalidate` | 过期后必须验证，不能用 stale | 严格一致性资源 |
 
 **短链 API（默认不缓存）**：
@@ -371,7 +384,7 @@ location /api/ {
 ### 5.3 发版后用户仍旧版怎么办
 
 1. 确认 `index.html` **没有**被 CDN/浏览器长期 `max-age` 强缓存  
-2. 确认构建产物 **filename 含 hash**（Vite/Webpack 默认）  
+2. 确认构建产物 **filename 含 hash**（**hash** = 文件内容指纹缩写；**Vite / Webpack** = 前端打包工具，会把 JS 文件名改成 `index-a1b2c3.js` 这种带 hash 的形式）  
 3. 运维对 CDN 做 **purge**（仅 HTML 或全站，按策略）  
 4. **后端 API 发版**不涉及浏览器 JS 缓存，但若改了 OpenAPI 契约，前端需重新构建  
 
@@ -531,7 +544,7 @@ sequenceDiagram
     participant J as JWTManager
 
     C->>G: POST /api/v1/auth/login JSON
-    G->>G: bcrypt 校验密码
+    G->>G: bcrypt 校验密码（bcrypt = 密码哈希算法，库里不存明文密码）
     G->>J: IssueAccess(user)
     J-->>G: access_token
     G-->>C: {"access_token":"eyJhbG..."}
@@ -667,6 +680,14 @@ await fetch('http://localhost:8080/api/me', { credentials: 'include' });
 - 方法 PUT、DELETE  
 
 ### 10.4 预检 OPTIONS 流程
+
+下图里的 **ACAO / ACAM / ACAH** 是 CORS 响应头缩写：
+
+| 缩写 | 全称 | 含义 |
+|------|------|------|
+| **ACAO** | Access-Control-Allow-Origin | 允许哪个前端域名读响应 |
+| **ACAM** | Access-Control-Allow-Methods | 允许哪些 HTTP 方法 |
+| **ACAH** | Access-Control-Allow-Headers | 允许带哪些自定义请求头（如 `Authorization`） |
 
 ```mermaid
 sequenceDiagram
