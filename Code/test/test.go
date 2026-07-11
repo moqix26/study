@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sync/atomic"
 )
 
 type Account struct {
@@ -28,5 +29,11 @@ func (a *Account) Withdraw(amount float64) error {
 func (a Account) Balance() float64 { return a.balance }
 
 func main() {
-
+	var requests atomic.Int64
+	requests.Add(1)
+	requests.Add(6)
+	requests.Add(9)
+	requests.Add(10)
+	requests.Add(1)
+	fmt.Println(requests.Load())
 }
