@@ -1,7 +1,8 @@
 # 学习状态板 · 实时更新
 
-> **最后更新**：2026-07-13 晚  
+> **最后更新**：2026-07-14 15:30  
 > **用法**：和 AI 聊天时以本文件为准；每聊完一段，AI 会更新「当前学什么」「进度」「今日记录」。  
+> **AI 交接**：见 `F:\study\.memory\`（readme.md 为协议，摘要按时间倒序读）  
 > **主路线文档**：[`go-backend-learning-plan.md`](go-backend-learning-plan.md) · [`后端学习/Go/00-学习路线图与说明.md`](后端学习/Go/00-学习路线图与说明.md)
 
 ---
@@ -29,7 +30,7 @@
 | Go 基础语法 | 6.5 | 变量/函数/结构体 OK；**接口、error、包结构**仍虚 |
 | Go 并发 | 5.5 | goroutine/channel **大概理解**，不熟练 |
 | **Go Web（net/http）** | **6.5** | health + POST + GET 完成；第 4 步内存 map |
-| **Go 05 进度** | **第 4 步** | ①health ②POST ③GET ✅ |
+| **Go 05 进度** | **已完成** | ①～④ 含 map+锁 ✅ |
 | 计网 | 1.5 | 01～03 md 看过但**看不懂**；计划 B 站短课 + curl |
 | MySQL / Redis | 0 | 未开始（正常，Go 07～08 再开） |
 | 项目（短链） | 1 | 仅 hello / health / 静态站级别 |
@@ -46,7 +47,8 @@
 |------|------|------|
 | Tour of Go | ☑ 看过 | 细节已模糊，不必重看全文 |
 | Go 00～04 | ☑ 过一遍 | 接口、并发需**小题巩固**，不重修全文 |
-| **Go 05 net/http** | **▶ 第 4 步** | ①～③ 完成；内存 map + mutex |
+| **Go 05 net/http** | ☑ | 内存用户 API + RWMutex 已过关 |
+| Go 补洞视频 | ▶ | 赵珊珊课看到 P66+，计划看完并发/网络 |
 | Go 06 Gin | ☐ | Go 05 验收后再开 |
 | Go 07～11 短链 | ☐ | 12 月前目标：能 demo + 能讲 |
 | 计网 01～03 | △ 看过 md | 未建立直觉，**暂停通读** |
@@ -65,7 +67,7 @@
 - [x] `curl` 测通 `/health` 200 + JSON（2026-07-13）
 - [x] 用 **`curl.exe -v`** 看懂 `>` / `<` 原始报文（2026-07-13）
 - [x] GET `/api/users/1` 路径参数（2026-07-13，修复 HandleFunc 注册）
-- [ ] 内存 map 存 POST 用户，GET 按 id 查，404 查无此人
+- [x] 内存 map 存 POST 用户，GET 按 id 查，404；含 RUnlock（2026-07-13～14）
 
 ---
 
@@ -78,53 +80,25 @@
 
 ---
 
-> **最后更新**：2026-07-13 21:45  
-
----
-
 ## 3. 现在学什么（AI 指定 · 只看这一块）
 
-> **更新于 2026-07-13 21:45**  
-> **Go 05 第 1～3 步已完成** ✅（health + POST + GET）
+> **更新于 2026-07-14 15:30**  
+> **Go 05 第 1～4 步已完成** ✅ · 换 AI 请读 `.memory/readme.md` 及最新摘要
 
-### 当前：**Go 05 · 第 4 步 — 内存 map 存用户**
+### 当前：**赵珊珊课收尾（并发优先）→ 然后 Go 06 Gin**
 
-**文件**：`F:\study\Code\http\http.go`（**你自己改**，AI 不直接动你的代码）
+1. **视频**：BV1nKWAzJEav 看完后半（协程/锁/channel 认真；网络可扫；反射可模糊）  
+2. **动手下一关**：Go 06 Gin — 把 `http.go` 那套 API 用 Gin 重写（AI **只贴聊天代码**，自己敲）  
+3. **短链代码**：仍 **8 月** 再写；项目只做短链，不跟商城课  
 
-**本关新增**：
-- `map[int]User` 当内存数据库
-- `sync.RWMutex`：POST 写锁、GET 读锁（HTTP 每请求一个 goroutine，必须防并发写坏 map）
-- POST 自动分配 `id`；GET 查不到返回 **404**
-- `strconv.Atoi` 把路径里的 `"1"` 转成数字
-
-**验收（按顺序）**：
-```powershell
-# 1. 重启服务后 POST 两次
-Invoke-RestMethod -Uri http://localhost:8080/api/users -Method POST -ContentType "application/json" -Body '{"name":"张三"}'
-Invoke-RestMethod -Uri http://localhost:8080/api/users -Method POST -ContentType "application/json" -Body '{"name":"李四"}'
-
-# 2. GET 应返回创建时存的数据
-Invoke-RestMethod http://localhost:8080/api/users/1
-Invoke-RestMethod http://localhost:8080/api/users/2
-
-# 3. 不存在的 id → 404
-Invoke-RestMethod http://localhost:8080/api/users/999
-```
-
-**注意**：重启 `go run .` 后 map 会清空，id 从 1 重新开始。
-
-**第 4 步 OK 后**：Go 05 基础闭环完成 → 下一章 **Go 06 Gin**（同样 API 用 Gin 重写一遍）。
-
----
-
-### 已完成步骤备忘
+### Go 05 已完成备忘
 
 | 步 | 内容 | 状态 |
 |----|------|------|
 | ① | GET `/health` | ✅ |
 | ② | POST `/api/users` 读 JSON | ✅ |
 | ③ | GET `/api/users/:id` 路径参数 | ✅ |
-| ④ | 内存 map + mutex，POST 存、GET 查、404 | ▶ 当前 |
+| ④ | 内存 map + mutex，POST 存、GET 查、404 | ✅ |
 
 **Windows 测 API**（PowerShell）：
 ```powershell
@@ -159,6 +133,18 @@ Invoke-RestMethod http://localhost:8080/api/users/1
 
 ## 6. 学习日志
 
+### 2026-07-14（15:30）
+
+- **学了啥**：写好 Codex 交接文档 `CODEX-HANDOFF.md`；明确下阶段用 Codex 答疑/规划
+- **现在干啥**：赵珊珊课继续看完 → 开 Go 06 Gin
+- **备注**：Go 05 第 4 步（含解锁）此前已验收通过
+
+### 2026-07-14（05:00）
+
+- **学了啥**：马士兵/赵珊珊 Go 课，约 2h 倍速跳看到 **第 66 集闭包**；比之前透一点
+- **现在干啥**：再看 `defer`（约 67）后建议停语法 → 跳到协程/锁，或回来开 Go 06 Gin
+- **备注**：长课只补洞，不作主线
+
 ### 2026-07-13（21:45）
 
 - **学了啥**：Go 05 ①～③ **全部 OK**；搞懂 HandleFunc 必须注册对应 handler
@@ -189,10 +175,12 @@ Invoke-RestMethod http://localhost:8080/api/users/1
 
 | 用途 | 资源 |
 |------|------|
+| AI 交接协议 | `F:\study\.memory\readme.md`（摘要按文件名倒序读最新） |
 | Go 官方 API | https://pkg.go.dev/net/http |
 | Go 路线 | `后端学习/Go/05-Go标准库与HTTP基础.md` |
 | 计网速成 | `前端学习/计算机网络/04-HTTP协议深入.md` §0；02 TCP |
 | 视频（试） | B 站 IT营 BV1Rm421N7Jy **按关键词跳**（HTTP/Gin/接口），不从头跟 |
+| Go 补洞长课 | 马士兵赵珊珊 BV1nKWAzJEav（已看到约 P66 闭包；跳着看，别当主线） |
 | 练习目录 | `F:/study/code/go-daily/`（建议把静态站也迁到此处统一管理） |
 
 ---

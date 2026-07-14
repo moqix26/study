@@ -1,6 +1,6 @@
 # GORM 与 MySQL 实战
 
-<!-- 修改说明: 2026-07-08 按 EXPANSION-STANDARD 新建 §0、FAQ≥10、闭卷自测、费曼检验；理论交叉引用 Java/06 -->
+<!-- 修改说明: 2026-07-08 按 EXPANSION-STANDARD 新建 §0、FAQ≥10、闭卷自测、费曼检验；理论交叉引用 Java/06；2026-07-14 补充完整短链模型、版本迁移、并发唯一约束与 keyset 分页 -->
 
 > **文件编码**：UTF-8。  
 > **定位**：Go 后端「持久化层」——GORM ORM 接 MySQL，完成 Model、CRUD、事务、迁移。  
@@ -44,6 +44,9 @@
 - [ ] Docker 启动 MySQL 8.0 并连接 GORM
 - [ ] 定义 User / ShortLink Model 与 AutoMigrate
 - [ ] 实现 CRUD + 分页 + 条件查询
+- [ ] 用版本化 SQL 迁移管理生产表结构
+- [ ] 正确处理 `.Error`、`RowsAffected` 与唯一约束竞态
+- [ ] 用复合游标完成短链 keyset 分页
 - [ ] 用 `db.Transaction` 完成转账式双表写入
 - [ ] 知道 N+1 问题与 `Preload`
 - [ ] 说出与 [Java 06](../Java/06-MySQL基础索引与事务.md) 对应的索引设计原则
@@ -69,6 +72,7 @@
 2. `POST /api/v1/users` 写入 MySQL，重启服务数据仍在。
 3. 用事务创建用户 + 默认配置两条记录，失败全回滚。
 4. 对 `short_code` 字段加唯一索引，解释为何需要（见 [系统设计 08](../系统设计/08-短链服务设计.md)）。
+5. 两个并发请求生成相同短码时，依靠数据库唯一约束保证只有一个成功，并安全重试另一个。
 
 ---
 
@@ -116,10 +120,11 @@ import (
 )
 
 func NewDB(cfg Config) (*gorm.DB, error) {
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local",
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=UTC&time_zone=%%27%%2B00%%3A00%%27",
 		cfg.User, cfg.Password, cfg.Host, cfg.Port, cfg.DBName)
 	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info), // 开发看 SQL
+		Logger:         logger.Default.LogMode(logger.Info), // 开发看 SQL
+		TranslateError: true, // 将重复键等错误翻译为 gorm.ErrDuplicatedKey
 	})
 	if err != nil {
 		return nil, err
@@ -177,22 +182,46 @@ type User struct {
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"` // 软删除
 }
 
-// internal/model/short_link.go — 10 章会用
+// internal/model/short_link.go — 10 章直接复用
+type LinkStatus uint8
+
+const (
+	LinkStatusActive   LinkStatus = 1
+	LinkStatusDisabled LinkStatus = 2
+)
+
 type ShortLink struct {
-	ID          int64     `gorm:"primaryKey" json:"id"`
-	ShortCode   string    `gorm:"size:16;uniqueIndex;not null" json:"short_code"`
-	OriginalURL string    `gorm:"size:2048;not null" json:"original_url"`
-	UserID      int64     `gorm:"index;not null" json:"user_id"`
-	ClickCount  int64     `gorm:"default:0" json:"click_count"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          int64          `gorm:"primaryKey;autoIncrement;index:idx_links_user_page,priority:4" json:"id"`
+	UserID      int64          `gorm:"not null;index:idx_links_user_page,priority:1" json:"user_id"`
+	ShortCode   string         `gorm:"type:varchar(16) CHARACTER SET ascii COLLATE ascii_bin;not null;uniqueIndex:uk_short_links_code" json:"short_code"`
+	OriginalURL string         `gorm:"type:text;not null" json:"original_url"`
+	Title       string         `gorm:"size:128;not null;default:''" json:"title"`
+	Status      LinkStatus     `gorm:"type:tinyint unsigned;not null;default:1" json:"status"`
+	ExpiresAt   *time.Time     `gorm:"index:idx_links_expires_at" json:"expires_at,omitempty"`
+	ClickCount  int64          `gorm:"not null;default:0" json:"click_count"`
+	Version     uint64         `gorm:"not null;default:1" json:"version"`
+	CreatedAt   time.Time      `gorm:"not null;index:idx_links_user_page,priority:3" json:"created_at"`
+	UpdatedAt   time.Time      `gorm:"not null" json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `gorm:"index:idx_links_user_page,priority:2" json:"-"`
 }
 ```
 
-**对照 [Java 06](../Java/06-MySQL基础索引与事务.md)**：`short_code` **唯一索引**防重复；`user_id` 普通索引加速「某用户的链接列表」。
+**字段为何这样设计**：
+
+| 字段/索引 | 项目作用 |
+|-----------|----------|
+| `short_code` + `uk_short_links_code` | 数据库作为最终防线，杜绝两个长链指向同一短码 |
+| `ascii_bin` | Base62 大小写敏感；避免 MySQL 默认排序规则把 `a` 和 `A` 当相同 |
+| `status` / `expires_at` | 支持禁用与过期，跳转前必须校验 |
+| `version` | 乐观锁与缓存版本控制，防止并发覆盖 |
+| `(user_id, deleted_at, created_at, id)` | 支持“我的短链”稳定倒序 keyset 分页 |
+| `click_count` | 最终汇总值；高频点击不在每次跳转中直接同步更新 MySQL |
+
+软删除后唯一短码仍被占用，这是刻意的安全策略：旧书签不应在未来突然跳到另一个用户的新资源。如果业务要复用短码，必须单独设计回收期和审计流程，不能仅把 `deleted_at` 塞进唯一索引。
 
 ---
 
-## 3. 迁移 AutoMigrate
+## 3. 迁移：开发 AutoMigrate，项目交付用版本化 SQL
 
 ```go
 func AutoMigrate(db *gorm.DB) error {
@@ -200,11 +229,53 @@ func AutoMigrate(db *gorm.DB) error {
 }
 ```
 
-| 能力 | AutoMigrate | 生产 Flyway |
+| 能力 | AutoMigrate | 版本化迁移工具 |
 |------|-------------|-------------|
 | 建表/加列 | ✅ | ✅ |
 | 删列/改类型 | ❌ 不安全 | ✅ 版本脚本 |
-| 实习项目 | 够用 | 加分项 |
+| 本地第一遍练习 | 够用 | 可选 |
+| 简历项目/部署环境 | 不作为发布方案 | 必须，结构变更可审计、可重复 |
+
+推荐使用 `golang-migrate`，迁移文件一旦发布就不再修改：
+
+```text
+migrations/
+├── 000001_create_users.up.sql
+├── 000001_create_users.down.sql
+├── 000002_create_short_links.up.sql
+└── 000002_create_short_links.down.sql
+```
+
+`000002_create_short_links.up.sql` 的核心结构应与 Model 对齐：
+
+```sql
+CREATE TABLE short_links (
+    id           BIGINT NOT NULL AUTO_INCREMENT,
+    user_id      BIGINT NOT NULL,
+    short_code   VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    original_url TEXT NOT NULL,
+    title        VARCHAR(128) NOT NULL DEFAULT '',
+    status       TINYINT UNSIGNED NOT NULL DEFAULT 1,
+    expires_at   DATETIME(3) NULL,
+    click_count  BIGINT NOT NULL DEFAULT 0,
+    version      BIGINT UNSIGNED NOT NULL DEFAULT 1,
+    created_at   DATETIME(3) NOT NULL,
+    updated_at   DATETIME(3) NOT NULL,
+    deleted_at   DATETIME(3) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_short_links_code (short_code),
+    KEY idx_links_user_page (user_id, deleted_at, created_at, id),
+    KEY idx_links_expires_at (expires_at),
+    CONSTRAINT fk_short_links_user FOREIGN KEY (user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+```bash
+migrate -path ./migrations -database "$MIGRATE_DATABASE_URL" up
+migrate -path ./migrations -database "$MIGRATE_DATABASE_URL" version
+```
+
+`MIGRATE_DATABASE_URL` 使用迁移工具要求的 URL 格式，不要默认它与 GORM 的 `user:pass@tcp(...)` DSN 完全相同。迁移应在发布步骤中单独执行，应用启动只检查 schema 版本，不让每个副本同时 `AutoMigrate`。`down.sql` 只用于本地/测试回滚；生产含数据回滚通常要写前向修复迁移，并先备份和演练。
 
 ---
 
@@ -216,7 +287,13 @@ type UserRepository struct {
 }
 
 func (r *UserRepository) Create(ctx context.Context, u *model.User) error {
-	return r.db.WithContext(ctx).Create(u).Error
+	if err := r.db.WithContext(ctx).Create(u).Error; err != nil {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			return fmt.Errorf("username already exists: %w", apperr.ErrConflict)
+		}
+		return fmt.Errorf("create user: %w", err)
+	}
+	return nil
 }
 
 func (r *UserRepository) GetByID(ctx context.Context, id int64) (*model.User, error) {
@@ -251,32 +328,93 @@ func (r *UserRepository) List(ctx context.Context, page, size int) ([]model.User
 	var users []model.User
 	var total int64
 	q := r.db.WithContext(ctx).Model(&model.User{})
-	q.Count(&total)
-	err := q.Offset((page - 1) * size).Limit(size).Order("id DESC").Find(&users).Error
-	return users, total, err
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count users: %w", err)
+	}
+	if err := q.Offset((page - 1) * size).Limit(size).Order("id DESC").Find(&users).Error; err != nil {
+		return nil, 0, fmt.Errorf("list users: %w", err)
+	}
+	return users, total, nil
 }
 ```
 
 ### 4.2 深分页：Offset 为什么越往后越慢
 
-`OFFSET 100000 LIMIT 20` 往往仍需扫描/跳过大量索引记录。列表页很深或数据持续增长时，优先使用基于稳定排序键的 cursor/keyset pagination：
+`OFFSET 100000 LIMIT 20` 往往仍需扫描/跳过大量索引记录，而且并发插入会让翻页重复或漏项。短链列表按 `created_at DESC, id DESC` 排序，用复合游标与 §2 的联合索引：
 
 ```go
-func (r *UserRepository) ListAfterID(ctx context.Context, afterID int64, size int) ([]model.User, error) {
+type LinkCursor struct {
+	CreatedAt time.Time `json:"created_at"`
+	ID        int64     `json:"id"`
+}
+
+func (r *LinkRepository) ListByUser(
+	ctx context.Context,
+	userID int64,
+	cursor *LinkCursor,
+	size int,
+) ([]model.ShortLink, bool, error) {
 	if size <= 0 || size > 100 {
 		size = 20
 	}
-	var users []model.User
-	q := r.db.WithContext(ctx).Order("id DESC").Limit(size)
-	if afterID > 0 {
-		q = q.Where("id < ?", afterID)
+	var links []model.ShortLink
+	q := r.db.WithContext(ctx).
+		Where("user_id = ?", userID).
+		Order("created_at DESC, id DESC").
+		Limit(size + 1)
+	if cursor != nil {
+		q = q.Where(
+			"(created_at < ? OR (created_at = ? AND id < ?))",
+			cursor.CreatedAt, cursor.CreatedAt, cursor.ID,
+		)
 	}
-	err := q.Find(&users).Error
-	return users, err
+	if err := q.Find(&links).Error; err != nil {
+		return nil, false, fmt.Errorf("list links by user: %w", err)
+	}
+	hasMore := len(links) > size
+	if hasMore {
+		links = links[:size]
+	}
+	return links, hasMore, nil
 }
 ```
 
-第一页传 `afterID=0`，下一页传上一页最后一条的 ID。复合排序如 `created_at DESC, id DESC` 必须用同样的复合条件和索引，`id` 用于打破时间相同的并列。
+响应把最后一行的 `created_at + id` 编码成不透明 Base64URL cursor；下一页原样传回。`id` 用于打破毫秒时间相同的并列。不要只传时间，也不要允许客户端任意修改 `user_id`——它必须来自 09 章鉴权 Context。
+
+### 4.3 唯一约束才是并发下的最终裁判
+
+“先 `SELECT short_code`，不存在再 `INSERT`”存在 TOCTOU 竞态：两个请求可能同时查到不存在。正确做法是直接尝试插入，由唯一索引裁决，只对短码冲突做有限重试：
+
+```go
+var ErrShortCodeConflict = errors.New("short code conflict")
+
+func (r *LinkRepository) Create(ctx context.Context, link *model.ShortLink) error {
+	err := r.db.WithContext(ctx).Create(link).Error
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return ErrShortCodeConflict
+	}
+	if err != nil {
+		return fmt.Errorf("create short link: %w", err)
+	}
+	return nil
+}
+
+func (s *LinkService) Create(ctx context.Context, userID int64, rawURL string) (*model.ShortLink, error) {
+	for attempt := 0; attempt < 5; attempt++ {
+		link := &model.ShortLink{UserID: userID, ShortCode: s.codes.New(), OriginalURL: rawURL}
+		err := s.repo.Create(ctx, link)
+		if err == nil {
+			return link, nil
+		}
+		if !errors.Is(err, repository.ErrShortCodeConflict) {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("generate unique short code after retries: %w", apperr.ErrUnavailable)
+}
+```
+
+若表里还有用户名等其他唯一索引，Repository 应根据具体约束名/错误上下文映射成不同领域错误，不能看到任何 1062 都当“短码碰撞”重试。
 
 ---
 
@@ -294,6 +432,35 @@ db.Unscoped().Delete(&user, id)
 ```
 
 **Updates vs Save**：`Updates` 忽略零值；`Save` 全量更新。
+
+更新短链时同时带 owner 与 version，既防越权又防并发覆盖：
+
+```go
+res := db.WithContext(ctx).Model(&model.ShortLink{}).
+	Where("id = ? AND user_id = ? AND version = ?", id, userID, oldVersion).
+	Updates(map[string]any{
+		"title":      title,
+		"version":    gorm.Expr("version + 1"),
+		"updated_at": time.Now(),
+	})
+if res.Error != nil {
+	return fmt.Errorf("update owned link: %w", res.Error)
+}
+if res.RowsAffected != 1 {
+	var owned int64
+	if err := db.WithContext(ctx).Model(&model.ShortLink{}).
+		Where("id = ? AND user_id = ?", id, userID).
+		Count(&owned).Error; err != nil {
+		return fmt.Errorf("check owned link after update conflict: %w", err)
+	}
+	if owned == 0 {
+		return apperr.ErrNotFound
+	}
+	return apperr.ErrConflict // 资源属于当前用户，但 version 已变化
+}
+```
+
+只检查 `.Error` 不够：UPDATE/DELETE 命中 0 行通常不会报 SQL 错误，必须检查 `RowsAffected`。
 
 ---
 
@@ -375,10 +542,13 @@ sequenceDiagram
 |------|------|------|
 | `Error 1062 Duplicate entry` | 唯一索引冲突 | 业务层转「用户名已存在」 |
 | `record not found` | First 无行 | 判 `gorm.ErrRecordNotFound` |
-| 时间差 8 小时 | DSN 缺 loc | `loc=Local` 或 UTC 统一 |
+| 时间差 8 小时 | 应用与 MySQL session 时区不一致 | 项目统一 `loc=UTC`，并把 session `time_zone` 设为 `+00:00` |
 | 中文乱码 | charset 非 utf8mb4 | DSN + 表 utf8mb4 |
 | 连接耗尽 | 未 SetMaxOpenConns | 配连接池 |
 | 慢查询 | 缺索引 | EXPLAIN，见 Java 06 |
+| `a`/`A` 短码冲突 | 列使用大小写不敏感 collation | `ascii_bin` + 唯一索引 |
+| 更新返回成功但数据没变 | 没检查 `RowsAffected` | 要求恰好命中预期行数 |
+| 接口偶发 500 且无上下文 | 直接返回/忽略 `.Error` | 每一步检查并 `%w` 包装操作语义 |
 
 ---
 
@@ -387,14 +557,24 @@ sequenceDiagram
 ```go
 // cmd/server/main.go
 func main() {
-	db, _ := repository.NewDB(loadConfig())
-	repository.AutoMigrate(db)
+	db, err := repository.NewDB(loadConfig())
+	if err != nil {
+		log.Fatalf("init database: %v", err)
+	}
+	// 本地练习可显式 AutoMigrate；部署版由发布步骤运行 migrations。
+	if isLocal() {
+		if err := repository.AutoMigrate(db); err != nil {
+			log.Fatalf("migrate database: %v", err)
+		}
+	}
 	userRepo := repository.NewUserRepository(db)
 	userSvc := service.NewUserService(userRepo)
 	userH := handler.NewUserHandler(userSvc)
 
 	r := router.Setup(userH)
-	r.Run(":8080")
+	if err := r.Run(":8080"); err != nil { // 项目最终版替换成 06 章显式 http.Server
+		log.Fatalf("serve http: %v", err)
+	}
 }
 ```
 
@@ -408,7 +588,7 @@ func main() {
 业务 CRUD 用 GORM；极致性能或复杂 SQL 可 sqlx/GORM Raw。
 
 **Q2：AutoMigrate 能上线吗？**  
-小项目/实习可以；大公司用版本化迁移（golang-migrate）。
+本地原型可以；要部署并写进简历的项目使用版本化迁移（如 golang-migrate），避免多副本启动时偷偷改表。
 
 **Q3：为什么 password 用 `json:"-"`？**  
 防止序列化泄漏；09 章存 bcrypt hash。
@@ -440,9 +620,15 @@ First 按主键排序取第一条；Take 无排序。
 **Q12：Context 传 GORM 有什么用？**  
 超时取消、链路 trace；`WithContext(ctx)` 必写。
 
+**Q13：创建前查重后再插入，为什么仍会重复？**
+检查与插入不是一个原子操作；并发正确性必须依赖数据库唯一约束，并捕获冲突。
+
+**Q14：短码字段为什么使用二进制/大小写敏感排序规则？**
+Base62 中 `a` 与 `A` 是两个字符；默认大小写不敏感 collation 会错误合并它们。
+
 ---
 
-## 11. 练习建议
+## 10. 练习建议
 
 ### 基础
 
@@ -458,21 +644,26 @@ First 按主键排序取第一条；Take 无排序。
 
 5. 事务：注册用户 + 插入欢迎短链占位
 6. 对 `ListByUserID` 做 EXPLAIN，对照 Java 06 加联合索引
+7. 并发 100 次强制生成同一 short_code，断言数据库最终只有 1 行
+8. 写 migration 集成测试：空库 `up` 后检查索引，再执行一次确保版本不漂移
 
 ---
 
-## 12. 学完标准
+## 11. 学完标准
 
 - [ ] Docker MySQL + GORM 连接成功
 - [ ] AutoMigrate User/ShortLink
 - [ ] CRUD + 分页 + 唯一约束处理
+- [ ] 部署路径使用版本化 migration，启动代码不忽略错误
+- [ ] 短码大小写敏感，冲突由唯一索引裁决并有限重试
+- [ ] “我的链接”使用 `created_at + id` keyset 分页
 - [ ] 会写 Transaction
 - [ ] Handler 不直连 GORM
 - [ ] 能口述与 Java 06 对应的索引场景
 
 ---
 
-## 13. 闭卷自测
+## 12. 闭卷自测
 
 1. GORM 在本项目分层里处于哪一层？
 2. `gorm.ErrRecordNotFound` 应如何处理？
@@ -500,7 +691,7 @@ First 按主键排序取第一条；Take 无排序。
 
 ---
 
-## 14. 费曼检验
+## 13. 费曼检验
 
 3 分钟：**「GORM 在你项目里怎么替代 MyBatis？」**
 
@@ -511,7 +702,7 @@ First 按主键排序取第一条；Take 无排序。
 
 ---
 
-## 15. 章节衔接
+## 14. 章节衔接
 
 | 模块 | 链接 |
 |------|------|
