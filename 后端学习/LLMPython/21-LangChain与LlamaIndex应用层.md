@@ -1,8 +1,8 @@
 # LangChain 与 LlamaIndex 应用层
 
 > **文件编码**：UTF-8。  
-> **前置**：[12 HuggingFace Transformers](12-HuggingFace-Transformers入门.md)、[15 LoRA/PEFT](15-微调SFT与LoRA-PEFT.md)；RAG 概念可先读 [AIAgent 06 RAG 基础](../AIAgent/06-RAG检索增强生成基础.md)。  
-> **对照**：[AIAgent 09 LangChain4j](../AIAgent/09-LangChain4j进阶.md)（Java 栈）；推理部署见 [LLMInfra 14 引擎导读](../LLMInfra/14-vLLM-TensorRT-LLM-llama.cpp架构导读.md)。
+> **前置**：[12 HuggingFace Transformers](12-HuggingFace-Transformers入门.md)、[15 LoRA/PEFT](15-微调SFT与LoRA-PEFT.md)；RAG 概念可先读 [AIAgent 05 RAG 基础](../AIAgent/05-RAG基础-分块检索与引用.md)。  
+> **对照**：[Go AIAgent 路线](../AIAgent/README.md)（Go 应用层）；推理部署见 [LLMInfra 14 引擎导读](../LLMInfra/14-vLLM-TensorRT-LLM-llama.cpp架构导读.md)。
 
 ---
 
@@ -16,10 +16,10 @@
 
 | 情况 | 建议 |
 |------|------|
-| 只会调 OpenAI API | 先读 [AIAgent 01](../AIAgent/01-大模型基础与API调用入门.md) |
-| 不懂 Embedding / 向量检索 | 先读 [AIAgent 06～07](../AIAgent/06-RAG检索增强生成基础.md) |
-| 已会 Spring AI RAG | ✅ 本章学 Python 等价物与差异 |
-| 要做生产 Agent | 本章 + [AIAgent 05 ReAct](../AIAgent/05-Agent架构与ReAct模式.md) |
+| 只会调 OpenAI API | 先读 [AIAgent 01](../AIAgent/01-大模型与API基础.md) |
+| 不懂 Embedding / 向量检索 | 先读 [AIAgent 05～07](../AIAgent/05-RAG基础-分块检索与引用.md) |
+| 已会 Go AIAgent RAG | ✅ 本章学 Python 框架等价物与差异 |
+| 要做生产 Agent | 本章 + [AIAgent 07 ReAct](../AIAgent/07-Agent编排-状态机与长任务.md) |
 
 ### 0.3 本章知识地图
 
@@ -27,7 +27,7 @@
 - [ ] 能画 Python RAG 索引/查询两阶段流水线
 - [ ] 会用 LCEL（LangChain Expression Language）拼 Chain
 - [ ] 会用 LlamaIndex 做 Document → Index → QueryEngine
-- [ ] 能对比 Python LangChain vs Java Spring AI / LangChain4j
+- [ ] 能对比 Python LangChain 与 Go 显式编排 / AgentGo
 - [ ] 知道何时用框架、何时裸写 Transformers + FAISS
 
 ### 0.4 建议学习时长
@@ -43,7 +43,7 @@
 ### 0.5 学完本章你能做什么
 
 1. 用 50 行 Python 跑通「Markdown 知识库 → 向量检索 → 带引用回答」。
-2. 向面试官解释：为什么 Java 产品用 Spring AI，研究/脚本用 LangChain。
+2. 向面试官解释：为什么 Go 产品服务保持显式 Provider/Tool/RAG 边界，研究与离线脚本可用 LangChain。
 3. 把本章 Demo 的 ingest 逻辑迁移到 [24 章项目](24-项目实战微调小型语言模型.md) 的 Gradio 前端。
 
 ### 0.6 与 LLMInfra / AIAgent 分工
@@ -53,7 +53,7 @@
   ↓
 Python 应用层（本章 21）→ RAG / Agent 编排
   ↓
-Java 产品 API（AIAgent 02～07）→ Spring Boot 对外服务
+Go 产品 API（AIAgent 02～08）→ Gin 对外服务
   ↓
 C++ 推理引擎（LLMInfra 14～16）→ vLLM / TensorRT-LLM 高吞吐
 ```
@@ -118,8 +118,8 @@ answer = chain.invoke("年假有多少天？")
 ### 2.3 Retriever 与 Agent
 
 - **Retriever**：只负责「找资料」，不参与生成。
-- **Agent**：LLM 决定调哪些 Tool（搜索、计算器、SQL），适合多步任务；对应 [AIAgent 05 ReAct](../AIAgent/05-Agent架构与ReAct模式.md)。
-- **Memory**：`ConversationBufferMemory` 存多轮；生产需截断 + 摘要，见 [AIAgent 08](../AIAgent/08-对话记忆与会话管理.md)。
+- **Agent**：LLM 决定调哪些 Tool（搜索、计算器、SQL），适合多步任务；对应 [AIAgent 07 ReAct](../AIAgent/07-Agent编排-状态机与长任务.md)。
+- **Memory**：`ConversationBufferMemory` 存多轮；生产需截断 + 摘要，见 [AIAgent 03](../AIAgent/03-流式对话-SSE与会话管理.md)。
 
 ### 2.4 常用 VectorStore 对照
 
@@ -127,7 +127,7 @@ answer = chain.invoke("年假有多少天？")
 |------|--------------|------|
 | FAISS | `FAISS` | 本地实验、无服务端 |
 | Chroma | `Chroma` | 轻量持久化 |
-| PGVector | `PGVector` | 与 Postgres 一体，对照 AIAgent 07 |
+| PGVector | `PGVector` | 与 Postgres 一体，对照 AIAgent 06 |
 | Milvus | `Milvus` | 大规模、过滤丰富 |
 
 ---
@@ -181,7 +181,7 @@ for chunk in chain.stream("问题"):
     print(chunk, end="", flush=True)
 ```
 
-对照 [AIAgent 03 SSE 流式](../AIAgent/03-流式对话与SSE实战.md)：Python 侧 `stream()` 等价于 Java `ChatClient.stream()`。
+对照 [AIAgent 03 SSE 流式](../AIAgent/03-流式对话-SSE与会话管理.md)：Python 侧 `stream()` 等价于 Java `ChatClient.stream()`。
 
 ---
 
@@ -247,7 +247,7 @@ print(response.source_nodes)  # 引用节点
 | 流式 | `chain.stream()` | `ChatClient.stream()` | `TokenStream` |
 | Agent | `create_tool_calling_agent` | 自定义 ReAct | `AiServices` + `@Tool` |
 
-**面试话术**：「业务 API 用 Spring AI 统一鉴权与监控；离线评估与数据脚本用 LangChain；模型权重与训练在本系列 12～15。」
+**面试话术**：「业务 API 用 Go 服务统一鉴权、预算和监控；离线评估与数据脚本可用 LangChain；模型权重与训练在本系列 12～15。」
 
 ---
 
@@ -263,13 +263,13 @@ print(response.source_nodes)  # 引用节点
 | 问题 | 原因 | 处理 |
 |------|------|------|
 | 检索为空 | chunk 过大 / 问法差异 | 调 chunk_size、HyDE、重排 |
-| 答案胡编 | Prompt 弱、temperature 高 | 拒答模板，对照 AIAgent 06 |
+| 答案胡编 | Prompt 弱、temperature 高 | 拒答模板，对照 AIAgent 05 |
 | 延迟高 | 串行 Embedding + LLM | 批处理、本地小 Embedding |
 | 版本漂移 | LC 0.1→0.2 API 大变 | 锁定 `langchain-core` 版本 |
 
 ### 7.3 可观测性
 
-对接 [22 章 wandb/mlflow](22-MLOps与实验跟踪wandb-mlflow.md) 记录：检索 hit@k、faithfulness、延迟 P99；对照 [AIAgent 15 可观测性](../AIAgent/15-LLM可观测性与评估体系.md)。
+对接 [22 章 wandb/mlflow](22-MLOps与实验跟踪wandb-mlflow.md) 记录：检索 hit@k、faithfulness、延迟 P99；对照 [AIAgent 08 可观测性](../AIAgent/08-评估可观测安全与成本.md)。
 
 ---
 
@@ -277,7 +277,7 @@ print(response.source_nodes)  # 引用节点
 
 | 技术 | 说明 | 延伸阅读 |
 |------|------|----------|
-| Hybrid 检索 | BM25 + 向量 | [AIAgent 13](../AIAgent/13-RAG进阶-检索优化与评估.md) |
+| Hybrid 检索 | BM25 + 向量 | [AIAgent 05](../AIAgent/05-RAG基础-分块检索与引用.md) |
 | Reranker | Cross-Encoder 重排 | 同上 |
 | GraphRAG | 图结构检索 | LlamaIndex KG Index |
 | Agentic RAG | 检索也交给 Agent | LangChain Agent + Retriever Tool |
@@ -287,7 +287,7 @@ print(response.source_nodes)  # 引用节点
 ## 9. FAQ
 
 **Q1：LangChain 还值得学吗？**  
-值得学 **概念与编排模式**；API 变动快，生产 Java 栈以 Spring AI 为主，Python 脚本与实验可用 LC/LlamaIndex。
+值得学 **概念与编排模式**；API 变动快，生产 Go 栈以显式 adapter 和状态机为主，Python 脚本与实验可用 LangChain/LlamaIndex。
 
 **Q2：LlamaIndex 能替代 LangChain 吗？**  
 纯 RAG 可以；复杂 Tool Agent 仍常选 LangChain。两者可混用：LlamaIndex 建 Index，LangChain 包 Agent。
@@ -298,14 +298,14 @@ print(response.source_nodes)  # 引用节点
 **Q4：和 24 章项目关系？**  
 24 章微调后的模型可作为 LlamaIndex 的 `Settings.llm`；RAG 知识库与本章 Demo 结构相同。
 
-**Q5：向量库选型与 AIAgent 07 一致吗？**  
+**Q5：向量库选型与 AIAgent 06 一致吗？**  
 原则一致：开发 FAISS/Chroma，生产 PGVector/Milvus，metadata 做租户隔离。
 
 **Q6：如何做 citation？**  
 LangChain 返回 `retriever` 的 `Document.metadata`；LlamaIndex 用 `response.source_nodes`。前端展示 filename + chunk_id。
 
 **Q7：LangChain4j 与 LangChain Python 代码能复用吗？**  
-不能直拷；概念（Retriever、Chain、Tool）可迁移，API 不同，见 [AIAgent 09](../AIAgent/09-LangChain4j进阶.md)。
+不能直拷；概念（Retriever、Chain、Tool）可迁移，API 不同，见 [AIAgent Go 路线](../AIAgent/README.md)。
 
 **Q8：推理加速放哪一层？**  
 应用层调 [20 章 vLLM OpenAI 兼容 API](20-vLLM-TGI与LMDeploy-Python侧.md)；内核优化见 [LLMInfra 07～16](../LLMInfra/07-大模型推理引擎架构概览.md)。
@@ -318,7 +318,7 @@ LangChain 返回 `retriever` 的 `Document.metadata`；LlamaIndex 用 `response.
 2. LCEL 中 `|` 管道语义是什么？
 3. RAG 索引阶段与查询阶段各做哪些事？
 4. `as_retriever(search_kwargs={"k": 4})` 中 k 含义？
-5. Spring AI 中哪组件等价于 LangChain Retriever + Prompt？
+5. Go AIAgent 中哪些接口分别对应 LangChain Retriever、Prompt 与 Tool？
 6. 为什么微调后仍需要 RAG？
 7. FAISS 适合生产吗？替代方案？
 8. 如何向 Java 面试官说明 Python 与 Spring 栈分工？
@@ -343,4 +343,4 @@ LangChain 返回 `retriever` 的 `Document.metadata`；LlamaIndex 用 `response.
 
 [22 MLOps 与实验跟踪 wandb/mlflow](22-MLOps与实验跟踪wandb-mlflow.md)
 
-并行复习：[AIAgent 06 RAG](../AIAgent/06-RAG检索增强生成基础.md)、[13 RAG 进阶](../AIAgent/13-RAG进阶-检索优化与评估.md)。
+并行复习：[AIAgent 05 RAG](../AIAgent/05-RAG基础-分块检索与引用.md)、[13 RAG 进阶](../AIAgent/05-RAG基础-分块检索与引用.md)。

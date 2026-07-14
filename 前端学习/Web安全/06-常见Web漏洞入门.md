@@ -306,7 +306,7 @@ UUID 难猜但 **泄露链接仍越权** → 必须鉴权 + 短期签名 URL。
 
 **术语（SSRF / Server-Side Request Forgery）**：诱使 **你的服务器** 去请求攻击者指定的 URL（含内网、云元数据）。  
 **生活类比**：骗快递员按你写的地址去取「机密文件」，实际取的是内网保险柜。  
-**为什么重要**：Agent「URL 总结」Tool、[07 LLM](./07-LLM应用安全与Prompt注入防护.md) 与 [AIAgent 11](../../后端学习/AIAgent/11-生产化与安全.md) 出网策略都与此相关。  
+**为什么重要**：Agent「URL 总结」Tool、[07 LLM](./07-LLM应用安全与Prompt注入防护.md) 与 [AIAgent 08](../../后端学习/AIAgent/08-评估可观测安全与成本.md) 出网策略都与此相关。  
 **本章用到的地方**：§4.2～§4.5、附录 D。
 
 ### 4.1 定义
@@ -685,7 +685,7 @@ MyBatis 动态 SQL 审计：
 
 ## 21. 下一章预告
 
-06 章你覆盖了 **经典服务端漏洞入门**。下一章（**07 LLM 应用安全与 Prompt 注入防护**）面向 AI 应用：**Prompt 注入、越狱、Tool 滥用、数据泄露**——与 [AIAgent 04 Tool](../../后端学习/AIAgent/04-FunctionCalling与Tool设计.md)、**[AIAgent 11 生产化与安全](../../后端学习/AIAgent/11-生产化与安全.md)** 双向链接，完成本系列收官。
+06 章你覆盖了 **经典服务端漏洞入门**。下一章（**07 LLM 应用安全与 Prompt 注入防护**）面向 AI 应用：**Prompt 注入、越狱、Tool 滥用、数据泄露**——与 [AIAgent 04 Tool](../../后端学习/AIAgent/04-ToolCalling与安全工具设计.md)、**[AIAgent 08 评估与安全](../../后端学习/AIAgent/08-评估可观测安全与成本.md)** 双向链接，完成本系列收官。
 
 ---
 
@@ -725,7 +725,7 @@ DTO 只暴露允许字段；`User` 实体勿直接绑定请求体（§7）。
 **后端** 必须 `#{}`；前端长度校验 **不能替代**（§2.8）。
 
 **Q12：Agent「抓取 URL 总结」Tool 读哪章？**  
-SSRF §4 + [07 LLM](./07-LLM应用安全与Prompt注入防护.md) + [AIAgent 11](../../后端学习/AIAgent/11-生产化与安全.md) URL 白名单。
+SSRF §4 + [07 LLM](./07-LLM应用安全与Prompt注入防护.md) + [AIAgent 08](../../后端学习/AIAgent/08-评估可观测安全与成本.md) URL 白名单。
 
 ---
 
@@ -777,15 +777,15 @@ SSRF §4 + [07 LLM](./07-LLM应用安全与Prompt注入防护.md) + [AIAgent 11]
 
 ---
 
-## 51. 与 AIAgent 11 / 07 的衔接
+## 51. 与 AIAgent 08 / 07 的衔接
 
 | 本章 | Agent 场景 | 后端落地 |
 |------|------------|----------|
-| IDOR §3 | Tool `getOrder(userId, orderId)` | userId 仅来自 SecurityContext → 见 [AIAgent 04 §11](../../后端学习/AIAgent/04-FunctionCalling与Tool设计.md) |
-| SSRF §4 | RAG 抓取用户 URL | [AIAgent 11](../../后端学习/AIAgent/11-生产化与安全.md) 出网策略 |
+| IDOR §3 | Tool `getOrder(userId, orderId)` | userId 仅来自 SecurityContext → 见 [AIAgent 04 §11](../../后端学习/AIAgent/04-ToolCalling与安全工具设计.md) |
+| SSRF §4 | RAG 抓取用户 URL | [AIAgent 08](../../后端学习/AIAgent/08-评估可观测安全与成本.md) 出网策略 |
 | 上传 §5 | 用户上传知识库 PDF | ingest 前扫描；与 07 间接注入联动 |
 
-学完 06 → 读 **07** → 做 Agent 04～05 → **Agent 11** 生产 Checklist。
+学完 06 → 读 **07** → 做 AIAgent 04、07 → **Agent 11** 生产 Checklist。
 
 ---
 
@@ -895,7 +895,7 @@ SQLi 成功时 **缩小爆炸半径**。
 
 **挑战 6**：为 shop 写 10 条「安全测试用例」表格（接口、输入、预期状态码）。
 
-**挑战 7**：阅读 [AIAgent 04](../../后端学习/AIAgent/04-FunctionCalling与Tool设计.md) §11，说明 Tool 与 IDOR 的相似性。
+**挑战 7**：阅读 [AIAgent 04](../../后端学习/AIAgent/04-ToolCalling与安全工具设计.md) §11，说明 Tool 与 IDOR 的相似性。
 
 ---
 
@@ -995,8 +995,8 @@ AI → 07 Prompt
 |------|------|------------|
 | [Java 05 MyBatis](../../后端学习/Java/05-MyBatis事务与接口工程化.md) | 动态 SQL | `#{}` 审计清单 → 附录 A |
 | [Java 04 SpringBoot](../../后端学习/Java/04-SpringBoot核心开发.md) | Controller | IDOR 在 `@PathVariable` 资源 |
-| [AIAgent 04 §11](../../后端学习/AIAgent/04-FunctionCalling与Tool设计.md) | Tool 安全 | Tool 查订单 = IDOR 面 |
-| **[AIAgent 11](../../后端学习/AIAgent/11-生产化与安全.md)** | §5 注入、限流 | SSRF/URL Tool 出网 + Prompt 检测 |
+| [AIAgent 04 §11](../../后端学习/AIAgent/04-ToolCalling与安全工具设计.md) | Tool 安全 | Tool 查订单 = IDOR 面 |
+| **[AIAgent 08](../../后端学习/AIAgent/08-评估可观测安全与成本.md)** | §5 注入、限流 | SSRF/URL Tool 出网 + Prompt 检测 |
 | [07 LLM](./07-LLM应用安全与Prompt注入防护.md) | §4 Tool | 与 §3 IDOR 同一原则 |
 
 ---
@@ -1018,4 +1018,4 @@ AI → 07 Prompt
 
 *本章已按 EXPANSION-STANDARD 扩充（§0+步骤表+逐行读+FAQ+自测+费曼）。*
 
-**EXPANSION-STANDARD 自检**：☑ §0 ☑ 步骤表 §11～12 ☑ 逐行读 §2.4/§3.4 ☑ FAQ≥12 ☑ 闭卷 10 题 ☑ 费曼 ☑ AIAgent 11 链接
+**EXPANSION-STANDARD 自检**：☑ §0 ☑ 步骤表 §11～12 ☑ 逐行读 §2.4/§3.4 ☑ FAQ≥12 ☑ 闭卷 10 题 ☑ 费曼 ☑ AIAgent 08 链接

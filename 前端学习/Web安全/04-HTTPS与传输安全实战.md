@@ -442,7 +442,7 @@ server:
 | `wss://` | TLS 上的 WebSocket |
 | SSE `https://` | 与 API 同证书策略 |
 
-[AIAgent 03 SSE](../../后端学习/AIAgent/03-流式对话与SSE实战.md) 上线须 HTTPS。
+[AIAgent 03 SSE](../../后端学习/AIAgent/03-流式对话-SSE与会话管理.md) 上线须 HTTPS。
 
 ---
 
@@ -605,7 +605,7 @@ curl -Ik https://127.0.0.1/       # -k 仅自签测试
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-与 [Linux 06 nginx](../../后端学习/Linux/06-进程与服务管理.md)、[Linux 07 ufw](../../后端学习/Linux/07-网络命令与防火墙基础.md) 联用：放行 443 前先 `ufw allow OpenSSH`。
+与 [Linux 06 nginx](../../后端学习/Linux/02-进程信号systemd与日志.md)、[Linux 07 ufw](../../后端学习/Linux/03-网络端口DNS防火墙与curl.md) 联用：放行 443 前先 `ufw allow OpenSSH`。
 
 ---
 
@@ -862,7 +862,7 @@ openssl x509 -in cert.pem -noout -dates -subject
 
 ## 35. 附录 O：与 Linux 13 Nginx 部署衔接
 
-[Linux 13 Nginx](../../后端学习/Linux/13-Nginx与Web服务部署.md) 部署 shop 时，TLS 证书与 80→443 跳转应与本章 §7、§14 一致。
+[Linux 13 Nginx](../../后端学习/Linux/08-NginxTLS与反向代理.md) 部署 shop 时，TLS 证书与 80→443 跳转应与本章 §7、§14 一致。
 
 ---
 

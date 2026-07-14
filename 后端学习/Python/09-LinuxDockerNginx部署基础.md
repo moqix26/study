@@ -17,7 +17,7 @@
 | 04～08 章 demo-api 本地能跑 | ✅ 本章 |
 | 会改 `.env`、会用 PowerShell 终端 | ✅ 本章 |
 | 没跑通过 demo-api | 先完成 **[08 Celery](./08-Celery与消息队列实战.md)** 或至少 04～07 |
-| Linux 完全零基础 | 先读 §2 命令表，边做边查；可配合 [Linux 01](../Linux/01-Linux入门与环境搭建.md) |
+| Linux 完全零基础 | 先读 §2 命令表，边做边查；可配合 [Linux 01](../Linux/00-学习路线与环境选择.md) |
 
 ### 0.3 本章知识地图（学完后应能勾选全部 ☐→☑）
 
@@ -681,7 +681,7 @@ curl http://127.0.0.1:8000/users
 | Celery Worker 容器 | §6 compose | [08 Worker](./08-Celery与消息队列实战.md) |
 | demo-api 项目结构 | §4 | [10 项目](./10-后端项目实战与面试准备.md) |
 | Vue 同域联调 | §8 Nginx | [Vue 08](../../前端学习/Vue/08-Axios网络请求与前后端联调.md) |
-| Linux 命令深入 | §2 | [Linux 01～14](../Linux/00-学习路线图与说明.md) |
+| Linux 命令深入 | §2 | [Linux 01～14](../Linux/README.md) |
 | Java 部署对照 | §16 表 | [Java 09](../Java/09-LinuxDockerNginx部署基础.md) |
 
 ---

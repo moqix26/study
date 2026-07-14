@@ -1,7 +1,7 @@
 # RAG 向量检索 FAISS 与 Milvus 深度实战
 
 > **文件编码**：UTF-8。  
-> **前置**：[21 LangChain/LlamaIndex](21-LangChain与LlamaIndex应用层.md)、[10 Embedding](10-序列模型与Embedding入门.md)；概念可先读 [AIAgent 06 RAG 基础](../AIAgent/06-RAG检索增强生成基础.md)。  
+> **前置**：[21 LangChain/LlamaIndex](21-LangChain与LlamaIndex应用层.md)、[10 Embedding](10-序列模型与Embedding入门.md)；概念可先读 [AIAgent 05 RAG 基础](../AIAgent/05-RAG基础-分块检索与引用.md)。  
 > **定位**：掌握 **Embedding 选型、FAISS IVF 索引、Milvus 集合与 Hybrid Search**，构建可扩展的生产级向量检索层。
 
 ---

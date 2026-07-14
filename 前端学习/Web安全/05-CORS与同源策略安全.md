@@ -335,7 +335,7 @@ Access-Control-Allow-Private-Network: true
 
 | 步骤 | 你的动作 | 预期看到什么 | 若不对 |
 |------|----------|--------------|--------|
-| 1 | Spring Boot 8080 已启动 | health/login 可访问 | [06 Linux curl](../../后端学习/Linux/07-网络命令与防火墙基础.md) |
+| 1 | Spring Boot 8080 已启动 | health/login 可访问 | [06 Linux curl](../../后端学习/Linux/03-网络端口DNS防火墙与curl.md) |
 | 2 | 执行下方 OPTIONS curl | 204/200 | 路径与 API 一致 |
 | 3 | 响应含 `Access-Control-Allow-Origin` | 具体 Origin 非 `*` | 查 §5 CorsConfig |
 | 4 | 含 `Allow-Methods`、`Allow-Headers` | 含 POST、content-type | 预检失败看 Security |
@@ -553,7 +553,7 @@ Spring Security **未放行 OPTIONS**；CORS 过滤器顺序在认证之后。
 CDN/缓存按 Origin 区分响应；缺失可能 **A 源策略缓存给 B 源**。
 
 **Q11：curl 不受 CORS 限制？**  
-对；[Linux 07](../../后端学习/Linux/07-网络命令与防火墙基础.md) curl 测通 ≠ 浏览器通。
+对；[Linux 07](../../后端学习/Linux/03-网络端口DNS防火墙与curl.md) curl 测通 ≠ 浏览器通。
 
 **Q12：notehub 暑假推荐联调方式？**  
 [todo.md](../../todo.md)：**Vite proxy 开发**；上线 **https 同域反代** 或严格白名单。

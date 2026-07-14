@@ -7,7 +7,7 @@
 > **技术栈版本**：Spring Boot 3.2+、JDK 17+、Nginx 1.24+。
 >
 > **关联章节**：
-> - [AIAgent 03 流式对话与 SSE 实战](../AIAgent/03-流式对话与SSE实战.md)（LLM 打字机场景，本章是其 **通用后端底座**）
+> - [AIAgent 03 流式对话与 SSE 实战](../AIAgent/03-流式对话-SSE与会话管理.md)（LLM 打字机场景，本章是其 **通用后端底座**）
 > - [Java 04 Spring Boot 核心开发](./04-SpringBoot核心开发.md)（Controller、CORS、分层）
 > - [Java 09 Linux Docker Nginx 部署基础](./09-LinuxDockerNginx部署基础.md)（Nginx 反代）
 > - [Java 10 后端项目实战与面试准备](./10-后端项目实战与面试准备.md)（项目联调）
@@ -50,7 +50,7 @@ flowchart LR
 | Nginx 反代静态与 API | `proxy_buffering off`、超时、WebSocket Upgrade |
 | 10 章项目联调 | `curl -N`、`wscat`、浏览器 `EventSource` 测试 |
 
-学完本章，你再读 [AIAgent 03](../AIAgent/03-流式对话与SSE实战.md) 时，不会只盯着 `ChatClient.stream()`，而是能讲清 **底层 HTTP 协议、线程模型、网关超时**——面试和排障都靠这个。
+学完本章，你再读 [AIAgent 03](../AIAgent/03-流式对话-SSE与会话管理.md) 时，不会只盯着 `ChatClient.stream()`，而是能讲清 **底层 HTTP 协议、线程模型、网关超时**——面试和排障都靠这个。
 
 ---
 
@@ -84,7 +84,7 @@ flowchart LR
 |--------------|----------|
 | 不会 Spring Boot 接口 | 先学 [04 Spring Boot](./04-SpringBoot核心开发.md) |
 | 不懂 HTTP 长连接 | 先读 §1.1～§1.2，对照短轮询 vs SSE 图 |
-| 要做 AI 打字机 | 本章 + [AIAgent 03](../AIAgent/03-流式对话与SSE实战.md) |
+| 要做 AI 打字机 | 本章 + [AIAgent 03](../AIAgent/03-流式对话-SSE与会话管理.md) |
 | 已写 SSE 但上线卡顿 | 直接看 §7 心跳 + §8 Nginx |
 
 **最低门槛**：会写 `@GetMapping`；会用 `curl`；知道 JSON 和 HTTP 状态码 200。
@@ -332,7 +332,7 @@ flowchart TB
 
 - 与 `spring-boot-starter-web`（Tomcat）**无缝共存**
 - 不需要把整个项目改成 WebFlux
-- [AIAgent 03](../AIAgent/03-流式对话与SSE实战.md) 的 `ChatStreamController` 走的就是这条路
+- [AIAgent 03](../AIAgent/03-流式对话-SSE与会话管理.md) 的 `ChatStreamController` 走的就是这条路
 
 ### 4.2 最小可运行示例
 
@@ -464,7 +464,7 @@ public SseEmitter streamFromFlux(Flux<String> flux) {
 }
 ```
 
-这与 [AIAgent 03 §5](../AIAgent/03-流式对话与SSE实战.md) 完全一致，本章补齐 **通用原理与排障**。
+这与 [AIAgent 03 §5](../AIAgent/03-流式对话-SSE与会话管理.md) 完全一致，本章补齐 **通用原理与排障**。
 
 ### 4.6 SseEmitter 生命周期
 
@@ -1035,7 +1035,7 @@ emitter.onError(e -> log.warn("client gone", e));
 - WebSocket 也要鉴权（握手拦截器或 STOMP `ChannelInterceptor`）
 - 限流：每用户最大连接数
 
-### 12.4 与 [AIAgent 03](../AIAgent/03-流式对话与SSE实战.md) 衔接
+### 12.4 与 [AIAgent 03](../AIAgent/03-流式对话-SSE与会话管理.md) 衔接
 
 | 03 章内容 | 16 章补齐 |
 |-----------|-----------|
@@ -1324,7 +1324,7 @@ location /api/sse/ {
 - [ ] 会写 SSE/WebSocket 心跳，并对齐 Nginx/网关超时
 - [ ] 会用 `curl -N` 和 `wscat` 测试
 - [ ] 能配置 CORS / Nginx `proxy_buffering off`
-- [ ] 能画 SSE vs WebSocket 选型表，并对接 [AIAgent 03](../AIAgent/03-流式对话与SSE实战.md) 流式 Chat
+- [ ] 能画 SSE vs WebSocket 选型表，并对接 [AIAgent 03](../AIAgent/03-流式对话-SSE与会话管理.md) 流式 Chat
 
 ---
 

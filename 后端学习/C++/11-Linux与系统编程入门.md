@@ -50,7 +50,7 @@ flowchart TB
 | 10 章 mini-http 能 curl | 直接跟 §5 日志与信号 |
 | 没装 WSL | 先完成 §1.1 安装 Ubuntu |
 | 只会 Windows PowerShell | 本章命令在 WSL bash 执行 |
-| 想部署到云服务器 | 与 [Linux 系列](../Linux/00-学习路线图与说明.md) 并行 |
+| 想部署到云服务器 | 与 [Linux 系列](../Linux/README.md) 并行 |
 
 ### 0.3 本章知识地图（学完后应能勾选全部 ☐→☑）
 

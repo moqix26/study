@@ -7,7 +7,7 @@
 > **关联章节**：
 > - [12 单元测试日志与配置工程化](./12-单元测试日志与配置工程化.md)（viper 配置、优雅停机）
 > - [11 短链服务项目实战（下）](./11-短链服务项目实战下.md)（待部署的 Go 短链服务）
-> - [Linux 12 Docker 容器基础](../Linux/12-Docker容器基础.md)（镜像/容器/volume 系统讲解）
+> - [Linux 12 Docker 容器基础](../Linux/07-Docker与Compose.md)（镜像/容器/volume 系统讲解）
 > - [系统设计 08 短链服务设计](../系统设计/08-短链服务设计.md)（MySQL+Redis+302 架构对照）
 
 ---
@@ -33,13 +33,13 @@
 | **WSL2** | Windows 里开一间 Linux 小厨房跑 Docker |
 
 **术语（Multi-stage Build）**：一个 Dockerfile 里多个 `FROM`，前一阶段编译，后一阶段只 COPY 二进制。
-**为什么重要**：Go 编译产物单文件，镜像可 < 30MB；比 [Linux 12 章](../Linux/12-Docker容器基础.md) Java jar 镜像更轻，但 compose 编排思路一致。
+**为什么重要**：Go 编译产物单文件，镜像可 < 30MB；比 [Linux 12 章](../Linux/07-Docker与Compose.md) Java jar 镜像更轻，但 compose 编排思路一致。
 
 ### 0.2 你需要提前知道什么
 
 | 水平 | 建议 |
 |------|------|
-| 未装 Docker | 先 [Linux 12 §2](../Linux/12-Docker容器基础.md) 安装 Engine |
+| 未装 Docker | 先 [Linux 12 §2](../Linux/07-Docker与Compose.md) 安装 Engine |
 | Windows 纯宿主机 | 装 **Docker Desktop + WSL2** 后端 |
 | 只会 `go run .` | 先 [12 章 viper](./12-单元测试日志与配置工程化.md) 外置 DSN |
 | 短链业务不懂 | 回 [11 章](./11-短链服务项目实战下.md) + [08 设计](../系统设计/08-短链服务设计.md) |
@@ -465,7 +465,7 @@ Windows 浏览器访问 `http://localhost:8080`——Docker Desktop 会转发端
 | 文件路径 | `/mnt/f/...` 略慢 | 本地 ext4 |
 | 网络 | localhost 直通 | 需端口转发或桥接 |
 
-详细安装见 [Linux 12 §2](../Linux/12-Docker容器基础.md)。
+详细安装见 [Linux 12 §2](../Linux/07-Docker与Compose.md)。
 
 ---
 

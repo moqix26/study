@@ -42,7 +42,7 @@
 - 生成式 eval：exact match、LLM-as-judge
 - 统计显著性与置信区间（概念）
 - 数据污染（contamination）检测
-- 与 [AIAgent 15 可观测性](../AIAgent/15-LLM可观测性与评估体系.md) 产品侧互补
+- 与 [AIAgent 08 可观测性](../AIAgent/08-评估可观测安全与成本.md) 产品侧互补
 
 ---
 

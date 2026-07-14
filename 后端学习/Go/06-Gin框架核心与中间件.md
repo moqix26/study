@@ -233,12 +233,12 @@ func run() error {
 	defer stop()
 
 	select {
-	case err := <-errCh:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
-		return fmt.Errorf("serve http: %w", err)
-	case <-stopCtx.Done():
+		case err := <-errCh:
+			if errors.Is(err, http.ErrServerClosed) {
+				return nil
+			}
+			return fmt.Errorf("serve http: %w", err)
+		case <-stopCtx.Done():
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

@@ -122,7 +122,7 @@ study/
 │   ├── Java/                       # MySQL / Redis 等原理复用
 │   ├── LLMInfra/                   # 长期扩展
 │   ├── LLMPython/                  # 长期扩展
-│   ├── AIAgent/                    # 长期扩展
+│   ├── AIAgent/                    # Go AI Agent / RAG 应用工程扩展
 │   └── Python/                     # 备选后端资料
 └── 前端学习/                       # Web、Git、网络与前端资料
 ```
@@ -138,8 +138,8 @@ study/
 - [Go 学习路线](后端学习/Go/00-学习路线图与说明.md)
 - [后端路线总览](后端学习/00-后端路线总览.md)
 - [数据结构与算法](后端学习/数据结构/README.md)
-- [Linux](后端学习/Linux/00-学习路线图与说明.md)
-- [系统设计](后端学习/系统设计/00-学习路线图与说明.md)
+- [Linux](后端学习/Linux/README.md)
+- [系统设计](后端学习/系统设计/README.md)
 - [Git](前端学习/Git/00-学习路线图与说明.md)
 - [计算机网络](前端学习/计算机网络/00-学习路线图与说明.md)
 
@@ -148,6 +148,7 @@ study/
 - [C++](后端学习/C++/00-学习路线图与说明.md)
 - [LLM Infra](后端学习/LLMInfra/00-学习路线图与说明.md)
 - [LLM Python](后端学习/LLMPython/00-学习路线图与说明.md)
+- [Go AI Agent / RAG](后端学习/AIAgent/README.md)
 - [HTML / CSS / JavaScript](前端学习/HTML%20CSS%20JS/00-学习路线图与说明.md)
 - [Vue](前端学习/Vue/00-学习路线图与说明.md)
 - [React](前端学习/React/00-学习路线图与说明.md)

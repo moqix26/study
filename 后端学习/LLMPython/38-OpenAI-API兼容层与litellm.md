@@ -2,7 +2,7 @@
 
 > **文件编码**：UTF-8。  
 > **前置**：[12 HuggingFace](12-HuggingFace-Transformers入门.md)、[20 vLLM/TGI](20-vLLM-TGI与LMDeploy-Python侧.md)、[21 LangChain](21-LangChain与LlamaIndex应用层.md)。  
-> **对照**：[AIAgent 03 网关](../AIAgent/03-LLM网关与多模型路由.md)；[LLMInfra 12 OpenAI 兼容](../LLMInfra/12-OpenAI兼容API与推理协议.md)。
+> **对照**：[AIAgent 03 网关](../AIAgent/02-Go模型调用与结构化输出.md)；[LLMInfra 12 OpenAI 兼容](../LLMInfra/12-OpenAI兼容API与推理协议.md)。
 
 ---
 
@@ -201,7 +201,7 @@ router_settings:
   fallbacks: [{"gpt-4o-mini": ["local-qwen"]}]
 ```
 
-客户端 `base_url=http://localhost:4000` 即 OpenAI 兼容——类似 [AIAgent 03](../AIAgent/03-LLM网关与多模型路由.md)。
+客户端 `base_url=http://localhost:4000` 即 OpenAI 兼容——类似 [AIAgent 03](../AIAgent/02-Go模型调用与结构化输出.md)。
 
 ---
 
@@ -341,4 +341,4 @@ if msg.tool_calls:
 
 ---
 
-*推理：[20 vLLM](20-vLLM-TGI与LMDeploy-Python侧.md) · 网关：[AIAgent 03](../AIAgent/03-LLM网关与多模型路由.md)*
+*推理：[20 vLLM](20-vLLM-TGI与LMDeploy-Python侧.md) · 网关：[AIAgent 03](../AIAgent/02-Go模型调用与结构化输出.md)*

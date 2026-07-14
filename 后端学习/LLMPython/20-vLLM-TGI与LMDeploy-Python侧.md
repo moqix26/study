@@ -149,7 +149,7 @@ for chunk in stream:
         print(chunk.choices[0].delta.content, end="")
 ```
 
-与 [AIAgent 03 SSE](../AIAgent/03-流式对话与SSE实战.md) 产品层衔接。
+与 [AIAgent 03 SSE](../AIAgent/03-流式对话-SSE与会话管理.md) 产品层衔接。
 
 ---
 
@@ -323,7 +323,7 @@ A100/H100 优先 bf16；老卡 fp16。
 瓶颈在 GPU kernel；Python 仅调度（Infra 13 pybind 对照）。
 
 **Q10：生产还要什么？**  
-鉴权、限流、日志、K8s HPA、模型版本回滚（Infra 18、AIAgent 11）。
+鉴权、限流、日志、K8s HPA、模型版本回滚（Infra 18、AIAgent 08）。
 
 ---
 

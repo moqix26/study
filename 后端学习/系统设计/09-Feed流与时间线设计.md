@@ -1,967 +1,532 @@
 # Feed 流与时间线设计
 
-<!-- 修改说明: 2026-06-30 按 EXPANSION-STANDARD 扩充 §0、Case 步骤表、ZSet 逐行读、FAQ≥12、闭卷自测、费曼检验 -->
-
-> **文件编码**：UTF-8。  
-> **定位**：社交类产品核心架构——在 [08 短链](./08-短链服务设计.md) 的读热点经验之上，学习 **Push / Pull / 混合** 模型、**扇出（Fan-out）** 与 **大 V 问题**。  
-> **前置**：[03 缓存](./03-缓存架构设计.md)、[05 DB 扩展](./05-数据库扩展与读写分离.md)、[Java/07 Redis](../Java/07-Redis核心原理与缓存实战.md)、[Java/12 高并发](../Java/12-高并发与分布式系统基础.md)。  
-> **可选扩展**：[Java/16 SSE 与 WebSocket](../Java/16-SSE与WebSocket实时通信.md) — 新帖实时推送。
+> **定位**：后期系统设计 Case，用来训练写扩散、读扩散、异步派生数据、复合游标和大规模关系图。
+>
+> **学习顺序**：当前正式项目仍是 Go 短链。完成短链 V2 后，再用本章理解 outbox、Redis 可重建数据、cursor 和 consumer lag；不建议现在另开 Feed 项目。
 
 ---
 
-## 0. 读前导读（零基础也能跟上）
+## 1. 需求、范围与不变量
 
-### 0.1 用一句话弄懂本章
-
-**一句话**：发帖是 **一对多扇出**——普通用户 **Push** 到粉丝 inbox，大 V **Pull** 合并；时间线用 **Redis ZSet**，分页用 **cursor** 防漏帖。
-
-### 0.2 你需要提前知道什么
-
-| 你已会 | 可以直接学本章 |
-|--------|----------------|
-| [08 短链](./08-短链服务设计.md) 读热点、Redis | ✅ 本章 |
-| [04 MQ](./04-消息队列架构设计.md) 异步削峰 | ✅ 本章 |
-| [Java/07 ZSet](../Java/07-Redis核心原理与缓存实战.md) | ✅ 本章 |
-| [数据结构/07 堆](../数据结构/04-树形结构/05-堆.md) K 路归并 | ✅ 进阶 |
-| 不懂关注关系建模 | 先读 §13.2 `follows` 表 |
-
-### 0.3 本章知识地图（学完后应能勾选全部 ☐→☑）
-
-- ☐ 3 分钟讲清 **Push / Pull / 混合**
-- ☐ 解释 **大 V 问题** 为何不能纯 Push
-- ☐ 写 **ZADD + ZREVRANGE** 读 Feed 伪代码
-- ☐ 设计 **cursor 分页** API 与 Redis 命令
-- ☐ 画 §14 完整架构 + 发帖/读 Feed 时序
-- ☐ 闭卷自测（§24）≥ 8/10
-
-### 0.4 建议学习时长与节奏
-
-| 阶段 | 内容 | 建议时长 |
-|------|------|----------|
-| 第 1 天 | §1～§4 需求、估算、Push/Pull | 2.5 h |
-| 第 2 天 | §5～§8 Fan-out、混合、大 V | 2.5 h |
-| 第 3 天 | §9～§12 排序、ZSet、分页、缓存 | 2 h |
-| 第 4 天 | §14 Case + 模拟 + 自测 | 2 h |
-
-### 0.5 学完本章你能做什么（可验证的具体动作）
-
-1. 估算纯 Push fan-out 为何「2000 亿条/天」不可行
-2. 白板画混合模型：粉丝 <1 万 Push，≥1 万 Pull merge
-3. 用 **小顶堆** 口述 200 路归并 Top 20 复杂度
-4. 说明 offset 分页漏帖原因与 cursor 解法
-5. 对比朋友圈（Push）与微博（混合）产品差异
-
-### 0.6 核心术语三件套
-
-**扇出（Fan-out）**：一次写扩散到多个读者的收件箱。  
-**生活类比**：老师发通知——抄送每个学生家长（Push）vs 家长自己来公告栏看（Pull）。  
-**为什么重要**：Feed 架构的核心矛盾。  
-**本章用到的地方**：§5～§7
-
-**写扩散（Push / Fan-out on Write）**：发帖时写入每个粉丝的 `timeline`。  
-**生活类比**：给每个粉丝邮箱各发一封副本。  
-**为什么重要**：读 Feed 极快 O(1) 拉 inbox。  
-**本章用到的地方**：§5
-
-**读扩散（Pull / Fan-out on Read）**：读 Feed 时聚合关注的人最近帖子。  
-**生活类比**：打开 App 时再去 200 个朋友家问「最近有啥动态」。  
-**为什么重要**：大 V 发帖写一次即可。  
-**本章用到的地方**：§6
-
----
-
-## 本章与上一章的关系
-
-| 上一章（[08 短链服务设计](./08-短链服务设计.md)） | 本章（09） | 下一章（[10 面试总表](./10-面试专题与知识点总表.md)） |
-|------------------------------------------------|------------|-----------------------------------------------------|
-| 一对一映射：shortCode → URL | **一对多扩散**：发帖 → 粉丝时间线 | 全系列知识点索引 |
-| 读多写少、O(1) 点查 | 写扩散 vs 读扩散、列表聚合 | 场景题冲刺 |
-| Redis 缓存单 key | Redis **ZSet** 时间线 + 分页 | Mock 面试日程 |
-| 异步统计 MQ | 异步 Fan-out、Ranking 服务 | 与 Java/14 对照 |
-
-[08 短链](./08-短链服务设计.md) 是「一个 key 查一次」；Feed 是「**一个写操作影响 N 个读视图**」——架构复杂度跃升。短链用 Counter 生成 ID；Feed 用 **Snowflake 发推 ID** + **ZSet score=时间戳** 排序。
-
-```mermaid
-flowchart LR
-    S08[08 短链 O1 映射] --> S09[09 Feed 扇出]
-    S09 --> S10[10 面试总表]
-    J07[Java/07 ZSet] --> S09
-    J16[Java/16 SSE/WS 可选] --> S09
-    DS07[数据结构/07 堆] --> S09
-```
-
-| 模块 | 链接 |
-|------|------|
-| Redis ZSet、排行榜 | [Java/07 Redis](../Java/07-Redis核心原理与缓存实战.md) |
-| 读写分离、分片 | [05 DB 扩展](./05-数据库扩展与读写分离.md) |
-| 缓存热点 | [03 缓存架构](./03-缓存架构设计.md) |
-| 实时推送（可选） | [Java/16 SSE/WebSocket](../Java/16-SSE与WebSocket实时通信.md) |
-| MQ 异步 | [04 MQ 架构](./04-消息队列架构设计.md) |
-
----
-
-## 1. 这一章解决什么问题
-
-**Feed 流（Timeline / News Feed）** 是 Twitter、微博、朋友圈、Instagram 的核心：用户打开 App，看到关注的人发布的内容按时间或算法排序的列表。
-
-系统设计面试要你能讲清：
-
-1. **Push（写扩散）** vs **Pull（读扩散）** vs **混合**
-2. **Fan-out on write** vs **Fan-out on read** 的取舍
-3. **大 V / celebrity 问题**（千万粉丝发一条推）
-4. 时间线 **排序**（时间序 vs 算法序）
-5. **Redis ZSet** 存时间线的工程细节
-6. **游标分页** vs offset 分页
-7. **热点 Feed 缓存** 与 **冷用户** 优化
-
----
-
-## 2. 需求澄清
-
-### 2.1 功能需求
+### 1.1 MVP 功能
 
 | 优先级 | 功能 | 说明 |
-|--------|------|------|
-| P0 | 发帖 | 用户发布推文（文本、图片、视频元数据） |
-| P0 | 首页 Feed | 拉取关注人的推文列表 |
-| P0 | 关注 / 取关 | 维护关注关系 |
-| P1 | 个人主页 | 某用户历史推文 |
-| P1 | 点赞 / 转发 | 互动计数（可异步） |
-| P2 | @、话题 # | 索引与检索 |
-| P2 | 推荐 Feed | 非纯关注流（算法） |
+|---|---|---|
+| P0 | 发帖 | 文本与媒体元数据，媒体文件走对象存储/CDN |
+| P0 | 关注流 | 查看已关注作者的帖子 |
+| P0 | 关注/取关 | 单向关系 |
+| P0 | 删除帖子 | 删除后不能继续对外展示 |
+| P1 | 用户主页 | 按时间查看某作者帖子 |
+| P1 | 屏蔽 | 双方内容立即不可见 |
+| P1 | 点赞/转发 | 计数可最终一致 |
+| P2 | 推荐流 | 召回、排序和关注流分开设计 |
 
-### 2.2 非功能需求
+### 1.2 非功能目标
 
-| 维度 | 典型值 |
-|------|--------|
-| DAU | 1～5 亿（Twitter 级） |
-| 每用户关注数 | 平均 200，上限 5000 |
-| 每用户日发帖 | 0.5～2 条 |
-| 每用户日刷 Feed | 20～100 次 |
-| Feed 延迟 | 发帖后 **< 5s** 出现在粉丝 Feed（Push 模型） |
-| 读 QPS | 远高于写 QPS |
-
-### 2.3 澄清问题
-
-```text
-□ 纯时间序还是算法排序？
-□ 是否单向关注（Twitter）还是双向好友（朋友圈）？
-□ 粉丝上限？是否存在百万粉大 V？
-□ 发帖后可见性延迟要求？
-□ 是否需要「仅自己可见」「粉丝可见」？
-```
-
----
-
-## 3. 容量估算
-
-### 3.1 假设（微博/Twitter 量级）
-
-| 指标 | 数值 |
-|------|------|
+| 维度 | 示例目标 |
+|---|---|
 | DAU | 2 亿 |
-| 平均关注 | 200 人 |
-| 日发帖 | 1 亿条（2亿 × 0.5） |
-| 日 Feed 刷新 | 40 亿次（2亿 × 20） |
+| Feed 峰值 | 约 14 万请求/秒 |
+| 发帖峰值 | 约 3500 请求/秒 |
+| 可见性 | 普通作者新帖 99% 在 5 秒内进入粉丝 Feed |
+| 读延迟 | 缓存命中时 P99 < 200ms |
+| 一致性 | 帖子源数据强持久；timeline 最终一致 |
+| 恢复性 | Redis timeline 丢失后可由关系和帖子源重建 |
 
-### 3.2 QPS
+### 1.3 关键不变量
 
-```text
-写 QPS（发帖）= 1亿 / 86400 ≈ 1157（平均），峰值 ×3 ≈ 3500
-
-读 QPS（拉 Feed）= 40亿 / 86400 ≈ 46300（平均），峰值 ×3 ≈ 14 万
-```
-
-**结论**：读是写的主要压力；缓存与 Fan-out 策略围绕读优化。
-
-### 3.3 存储（Push 模型 fan-out 箱）
-
-若 **写扩散** 到每个粉丝 inbox：
-
-```text
- worst case 单帖 fan-out = 粉丝数
- 平均 fan-out ≈ 200（普通用户）
- 日写扩散条数 = 1亿帖 × 200 = 2000 亿条/天  ← 不可接受！
-```
-
-因此 **纯 Push 不可全局使用**，必须 **混合** 或 **只 Push 普通用户**。
-
-**Pull 模型** 仅存发帖表：
-
-```text
- 推文表日增 1亿 × 500B ≈ 50 GB/天
- 关注关系 2亿用户 × 200 × 16B ≈ 640 GB（可分区）
-```
-
-### 3.4 Fan-out 数量级直觉
-
-| 用户类型 | 粉丝数 | 发帖 fan-out 策略 |
-|----------|--------|-------------------|
-| 普通 | < 1 万 | Push 到粉丝 inbox |
-| 大 V | 1 万～100 万 | **不 Push** 或 Push 到活跃粉丝 |
-| 顶流 | > 100 万 | **Pull only** + 热点缓存 |
+1. MySQL 中的帖子和关系是权威数据，Redis timeline 是可重建派生数据。
+2. 发帖成功后，必须存在可重试的分发事件；不能只靠“DB 提交后顺手发 MQ”。
+3. 删除、取关、屏蔽的读路径必须按权威状态过滤，异步清理只负责降成本。
+4. Cursor 必须有稳定全序，不能把超过 `2^53` 的 Snowflake ID直接放进 Redis `float64` score。
 
 ---
 
-## 4. Push vs Pull vs 混合
+## 2. 容量估算：区分 API QPS 与内部放大
 
-### 4.1 三种模型对比
+示例假设：
 
-| 模型 | 发帖时 | 读 Feed 时 | 优点 | 缺点 |
-|------|--------|------------|------|------|
-| **Push（写扩散）** | 写入每个粉丝的 inbox | 直接读 inbox | **读极快** | 写放大；大 V 爆炸 |
-| **Pull（读扩散）** | 只写发帖表 | 查关注列表 → 聚合各用户近期帖 | **写轻** | **读慢**、关注多时延迟高 |
-| **混合** | 普通 Push；大 V Pull | 合并 inbox + 实时拉大 V | **平衡** | 实现复杂 |
+- DAU：2 亿；
+- 每人日均发帖：0.5；
+- 每人日均刷新 Feed：20 次；
+- 平均关注：200；
+- 首页每次返回 20 条。
 
-### 4.2 图示
+### 2.1 API QPS
 
-```mermaid
-flowchart TB
-    subgraph push [Push 写扩散]
-        P1[用户A发帖] --> F1[粉丝1 inbox]
-        P1 --> F2[粉丝2 inbox]
-        P1 --> F3[粉丝N inbox]
-    end
+```text
+日发帖 = 2亿 × 0.5 = 1亿
+平均发帖 QPS = 1亿 / 86400 ≈ 1157
+峰值按 3 倍 ≈ 3500
 
-    subgraph pull [Pull 读扩散]
-        R1[用户B读Feed] --> Q1[查关注列表]
-        Q1 --> Q2[查每人最近帖]
-        Q2 --> M1[归并排序 TopK]
-    end
+日 Feed 请求 = 2亿 × 20 = 40亿
+平均 Feed QPS = 40亿 / 86400 ≈ 46300
+峰值按 3 倍 ≈ 14万
 ```
 
-### 4.3 Twitter 演进（公开资料摘要）
+### 2.2 纯 Push 的写放大
 
-- 早期偏 Pull
-- 引入 **Fan-out on write** 服务（普通用户）
-- **Fan-out on read** 处理大 V（如奥巴马、马斯克级）
-- 混合 + **缓存 home timeline**
+```text
+日 timeline 引用写入
+= 1亿帖子 × 200粉丝
+= 200亿条/天
 
-### 4.4 朋友圈 vs 微博
+平均约 23万次写入/秒
+峰值按 3 倍约 69万次写入/秒
+```
 
-| 产品 | 关系 | 模型倾向 |
-|------|------|----------|
-| 微信朋友圈 | 双向好友，人数少 | Push 可行（好友上限 5000） |
-| 微博/Twitter | 单向关注，大 V 多 | **必须混合** |
-| Instagram | 关注 + 算法 | 混合 + Ranking |
+这不是一句“绝对做不到”就结束。还要考虑：
+
+- 活跃粉丝比例；
+- 大 V 是否跳过 Push；
+- Redis pipeline 和批量；
+- 复制流量；
+- 每条引用的内存开销；
+- 可见性 SLO 和 consumer lag。
+
+### 2.3 Pull 的读放大
+
+最朴素 Pull 在 14 万 Feed QPS 下，每次查询 200 个关注作者：
+
+```text
+内部作者流读取 ≈ 14万 × 200 = 2800万次/秒
+```
+
+因此纯 Pull 也不可直接照搬。工业实现通常是混合模型、批量多路归并与缓存。
+
+### 2.4 Redis 内存
+
+若 2 亿用户都保留最近 1000 条 timeline 引用，按每条 ZSet 成员平均约 60B 粗估：
+
+```text
+2亿 × 1000 × 60B ≈ 12TB
+```
+
+这是未计副本、allocator 碎片和 key 元数据的粗估。实际应根据真实编码压测，且只为活跃用户保留 timeline，冷用户按需重建。
+
+### 2.5 出口带宽
+
+若 20 条 Feed JSON 平均 20KB：
+
+```text
+14万 × 20KB ≈ 2.8GB/s ≈ 22.4Gbps
+```
+
+图片和视频必须走对象存储 + CDN；Feed API 只返回元数据和媒体 URL。
 
 ---
 
-## 5. Fan-out on Write 详解
-
-### 5.1 流程
-
-```text
-1. 用户 A 发帖 → 生成 tweet_id（Snowflake）
-2. 写入 tweets 表（持久化）
-3. 查 A 的粉丝列表（可分页批量）
-4. 对每个粉丝 B：LPUSH/ZADD 到 timeline:B
-5. 可选：异步 MQ 削峰 fan-out 任务
-```
-
-### 5.2 Redis ZSet 存 Timeline
-
-```text
-Key:   timeline:{userId}
-Score: tweet_id 或 发布时间戳（毫秒）
-Member: tweet_id
-```
-
-**为何 ZSet**：
-
-- 按 score **O(log N)** 插入
-- **ZREVRANGE** 按时间倒序取 Top K — O(log N + M)
-- 与 [Java/07 ZSet 排行榜](../Java/07-Redis核心原理与缓存实战.md) 同一数据结构
-
-```redis
-ZADD timeline:10001 1719756000000 9876543210987654321
-ZREVRANGE timeline:10001 0 19 WITHSCORES
-```
-
-### 5.3 容量与裁剪
-
-单用户 inbox 不能无限增长：
-
-```text
-ZADD 后 ZREMOVANGEBYRANK 保留最新 1000 条
-或 EXPIRE + 定期 trim
-```
-
-### 5.4 异步 Fan-out
-
-```mermaid
-sequenceDiagram
-    participant U as 用户
-    participant TS as TweetService
-    participant DB as MySQL
-    participant MQ as Kafka
-    participant FO as FanoutWorker
-    participant R as Redis
-
-    U->>TS: POST 发帖
-    TS->>DB: INSERT tweet
-    TS->>MQ: FanoutTask(tweetId, authorId)
-    TS-->>U: 201 成功
-
-    MQ->>FO: 消费任务
-    loop 批量粉丝
-        FO->>DB: 查粉丝 page
-        FO->>R: ZADD timeline:fanId
-    end
-```
-
-发帖 API **快速返回**；粉丝 Feed 秒级 eventual visible。
-
-与 [04 MQ](./04-消息队列架构设计.md) 一致。
-
----
-
-## 6. Fan-out on Read 详解
-
-### 6.1 流程
-
-```text
-1. 用户 B 请求 Feed page=1
-2. 查 B 的关注列表 [A1, A2, ..., A200]
-3. 对每个 Ai：查最近 20 条 tweet（带缓存）
-4. 200 × 20 = 4000 条候选 → **归并**取 Top 20
-5.  Hydrate：批量查 tweet 正文、作者信息
-```
-
-### 6.2 归并优化
-
-- 每个关注用户维护 **最近 N 条** ZSet 缓存 `user_tweets:{userId}`
-- 200 路 **多路归并**（类似 merge K sorted lists — [数据结构/07 堆](../数据结构/04-树形结构/05-堆.md)）
-- 用小顶堆维护 K=20：O(200 log 20)
-
-### 6.3 适用场景
-
-- 大 V 发帖（只写一条 tweet 表，不 fan-out）
-- 关注数极多的用户读 Feed（inbox 合并 pull 大 V 列表）
-
----
-
-## 7. 混合模型（工业界标准答案）
-
-### 7.1 策略
-
-```text
-IF 作者粉丝数 < FANOUT_THRESHOLD（如 10000）:
-    Push 到所有粉丝 inbox
-ELSE:
-    仅写入作者 user_tweets:{authorId}
-    读者拉 Feed 时，inbox 合并 + 拉取关注的大 V 列表最近帖
-```
-
-### 7.2 合并读路径
-
-```mermaid
-flowchart TD
-    A[GET /feed] --> B[读 Redis timeline:userId Push 部分]
-    A --> C[查关注列表中的大V]
-    C --> D[批量拉 user_tweets:bigV]
-    B --> E[多路归并 Top 20]
-    D --> E
-    E --> F[批量 Hydrate 正文]
-    F --> G[返回 JSON]
-```
-
-### 7.3 粉丝数缓存
-
-```text
-Redis: follower_count:{userId}  INCR/DECR 关注时更新
-发帖时 O(1) 判断 Push or Skip
-```
-
----
-
-## 8. Celebrity Problem（大 V 问题）
-
-### 8.1 问题定义
-
-大 V 有 **1000 万粉丝**，发 1 帖若 Push：
-
-```text
-1000 万次 Redis ZADD ≈ 即使 1ms/次也需要 10000 秒
-```
-
-不可行。
-
-### 8.2 解决方案矩阵
-
-| 方案 | 说明 |
-|------|------|
-| **不 Push** | 大 V 帖只在 Pull 路径合并 |
-| **Push 活跃粉丝** | 仅 30 天内活跃粉丝 inbox |
-| **分级 Fan-out** | 在线粉丝 SSE 推送；离线 Pull |
-| **预计算 hot feed** | 全局热点榜单独 product |
-| **限流发帖** | 产品层限制（不解决架构） |
-
-### 8.3 微博实践（公开技术分享归纳）
-
-- 普通用户：**推**模式
-- 大 V：**拉**模式 + 缓存
-- **关系服务** 与 **Timeline 服务** 拆分
-- **Memcached** 多级缓存 timeline
-
----
-
-## 9. 时间线排序与 Ranking
-
-### 9.1 纯时间序（Chronological）
-
-```text
-score = publish_timestamp
-ZREVRANGE 即最新在前
-```
-
-- 简单、可预期
-- Twitter 曾提供「最新 / 推荐」切换
-
-### 9.2 算法排序（Algorithmic Feed）
-
-```text
-score = f(时间衰减, 互动率, 亲密度, 内容质量)
-```
-
-| 因子 | 说明 |
-|------|------|
-| 时间衰减 | 越新越高 |
-| 互动 | 赞转评加权 |
-| 亲密度 | 常互动的人权重高 |
-| 多样性 | 避免同一作者刷屏 |
-
-**架构**：
-
-```text
-离线/近线：Ranking 服务对候选集打分
-在线：Feed 召回（Push inbox + Pull）→ Ranking → 重排 → 返回
-```
-
-### 9.3 与 ZSet 的关系
-
-- 时间序：score = timestamp
-- 算法序：可 **每次读时重算**（inbox 存 tweet_id，score 不作为最终序）或 **二级排序服务**
-
----
-
-## 10. Redis ZSet 工程细节
-
-### 10.1 Key 设计
-
-| Key | 类型 | 说明 |
-|-----|------|------|
-| `timeline:{uid}` | ZSet | 用户 home timeline |
-| `user_tweets:{uid}` | ZSet | 用户发推历史 |
-| `following:{uid}` | Set/ZSet | 关注列表 |
-| `followers:{uid}` | Set | 粉丝列表（fan-out 用） |
-
-### 10.2 命令与复杂度
-
-| 操作 | 命令 | 复杂度 |
-|------|------|--------|
-| 插入 | ZADD | O(log N) |
-| 最新 20 条 | ZREVRANGE 0 19 | O(log N + 20) |
-| 分页 | ZREVRANGEBYSCORE | O(log N + M) |
-| 裁剪 | ZREMRANGEBYRANK | O(log N + M) |
-
-### 10.3 持久化与高可用
-
-- Redis Cluster 按 `uid` 分片
-- 热 key：`timeline:celebrity_fan` 可能过大 → 拆分或 Pull
-
-详见 [Java/07 Redis](../Java/07-Redis核心原理与缓存实战.md)。
-
----
-
-## 11. 分页：Offset vs Cursor
-
-### 11.1 Offset 分页的问题
+## 3. 正式 API 设计
+
+| Method | Path | 说明 |
+|---|---|---|
+| POST | `/api/v1/tweets` | 发帖 |
+| DELETE | `/api/v1/tweets/:id` | 删除自己的帖子 |
+| GET | `/api/v1/users/:id/tweets` | 用户主页 |
+| PUT | `/api/v1/users/:id/follow` | 关注 |
+| DELETE | `/api/v1/users/:id/follow` | 取关 |
+| PUT | `/api/v1/users/:id/block` | 屏蔽 |
+| DELETE | `/api/v1/users/:id/block` | 解除屏蔽 |
+| GET | `/api/v1/feed` | 首页关注流 |
 
 ```http
-GET /feed?page=2&size=20  → OFFSET 20 LIMIT 20
+POST /api/v1/tweets
+Idempotency-Key: 018f...
+{"text":"hello","media_ids":["01J..."],"visibility":"followers"}
+
+GET /api/v1/feed?limit=20&cursor=<opaque>
+→ {"items":[],"next_cursor":"...","has_more":true,"as_of":"..."}
 ```
 
-Feed **实时新增** 会导致：
+API 规则：
 
-- **重复**：翻页时新帖插入，第 2 页看到第 1 页已有内容
-- **漏帖**：同理
-
-### 11.2 游标（Cursor）分页 — 推荐
-
-```http
-GET /feed?limit=20
-GET /feed?limit=20&cursor=9876543210987654321
-```
-
-**cursor** = 上一页最后一条的 `tweet_id` 或 `(score, tweet_id)`：
-
-```redis
-ZREVRANGEBYSCORE timeline:10001 (cursor_score -inf LIMIT 20
-```
-
-或使用 **Snowflake ID** 单调递减特性：`tweet_id < cursor`。
-
-**响应**：
-
-```json
-{
-  "tweets": [...],
-  "nextCursor": "9876543210987654320",
-  "hasMore": true
-}
-```
-
-### 11.3 对比
-
-| 方式 | 一致性 | 性能 |
-|------|--------|------|
-| Offset | 差 | OFFSET 大时慢 |
-| **Cursor** | **好** | 稳定 O(log N + M) |
+- `1 <= limit <= 100`；
+- cursor 是不透明字符串，客户端只能原样回传；
+- 不存在、已删除、无权查看统一按产品规则返回 404；
+- 发帖幂等键重放返回原 tweet；
+- Feed 可以最终一致，但删除和屏蔽必须由读时权威过滤保证。
 
 ---
 
-## 12. 热点 Feed 缓存
+## 4. 权威数据模型
 
-### 12.1 热点类型
-
-| 热点 | 说明 |
-|------|------|
-| 热用户 Feed | 明星粉丝也疯狂刷新 |
-| 热 tweet | 单条病毒传播 |
-| 全局热点 | 热搜榜 |
-
-### 12.2 缓存策略
-
-```text
-1. 完整 Feed 响应缓存（短 TTL 30s）：feed:cache:{uid}:{cursor}
-2. tweet 正文缓存：tweet:{id}
-3. 用户信息：user:{id}
-4. 本地 Caffeine + Redis 二级
-```
-
-### 12.3 与 [03 缓存架构](./03-缓存架构设计.md) 一致
-
-- **穿透**：不存在的 tweet_id 布隆过滤
-- **击穿**：singleflight 加载热 tweet
-- **雪崩**：TTL 加随机
-
-### 12.4 冷用户优化
-
-长时间不登录用户：
-
-- inbox 过期清空
-- 首次打开 **Pull 重建** 或 **只拉最近 7 天**
-
----
-
-## 13. 数据库 Schema
-
-### 13.1 推文表
+### 4.1 简化 MySQL Schema
 
 ```sql
 CREATE TABLE tweets (
-    id           BIGINT PRIMARY KEY COMMENT 'Snowflake',
-    user_id      BIGINT NOT NULL,
-    content      TEXT,
-    media_urls   JSON,
-    reply_to_id  BIGINT NULL,
-    created_at   DATETIME NOT NULL,
-    KEY idx_user_created (user_id, created_at DESC)
-) ENGINE=InnoDB;
-```
-
-### 13.2 关注关系
-
-```sql
+  id BIGINT UNSIGNED PRIMARY KEY, author_id BIGINT UNSIGNED NOT NULL,
+  text_content VARCHAR(2000) NOT NULL, visibility TINYINT NOT NULL,
+  status TINYINT NOT NULL, created_at DATETIME(3) NOT NULL, deleted_at DATETIME(3),
+  KEY idx_author_created (author_id,deleted_at,created_at,id)
+);
 CREATE TABLE follows (
-    follower_id  BIGINT NOT NULL,
-    followee_id  BIGINT NOT NULL,
-    created_at   DATETIME NOT NULL,
-    PRIMARY KEY (follower_id, followee_id),
-    KEY idx_followee (followee_id)
-) ENGINE=InnoDB;
+  follower_id BIGINT UNSIGNED NOT NULL, followee_id BIGINT UNSIGNED NOT NULL,
+  created_at DATETIME(3) NOT NULL, PRIMARY KEY (follower_id,followee_id),
+  KEY idx_followee_follower (followee_id,follower_id)
+);
+CREATE TABLE blocks (
+  blocker_id BIGINT UNSIGNED NOT NULL, blocked_id BIGINT UNSIGNED NOT NULL,
+  PRIMARY KEY (blocker_id,blocked_id), KEY idx_blocked (blocked_id,blocker_id)
+);
+CREATE TABLE feed_outbox (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  event_id CHAR(26) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  aggregate_id BIGINT UNSIGNED NOT NULL, event_type VARCHAR(32) NOT NULL,
+  payload JSON NOT NULL, next_retry_at DATETIME(3) NOT NULL,
+  claimed_until DATETIME(3), published_at DATETIME(3),
+  UNIQUE KEY uk_event (event_id),
+  KEY idx_pending (published_at,next_retry_at,claimed_until,id)
+);
 ```
 
-- `follower_id` 查「我关注了谁」（Pull 用）
-- `followee_id` 查「谁关注我」（Fan-out 用）
+### 4.2 大规模关系分片
 
-### 13.3 是否存 timeline 表
+单表双索引适合学习项目，不代表 400 亿关系边可以放一台 MySQL。
 
-| 方案 | 说明 |
-|------|------|
-| 仅 Redis | 快，丢数据需重建 |
-| Redis + MySQL timeline 表 | 持久化 inbox，成本高 |
-| **Twitter 做法** | Redis/Memcached 为主，持久化 tweet 源 + 重建 |
+规模增大后通常维护两份邻接视图：
 
-与 [05 分库分表](./05-数据库扩展与读写分离.md)：`user_id` / `tweet_id` 分片。
+- `following_by_user`：按 follower 分片，服务“我关注谁”；
+- `followers_by_user`：按 followee 分片，服务 fan-out；
+- 关系事件异步复制到另一视图，读路径明确延迟边界；
+- 屏蔽关系因安全语义更严格，需要更短缓存和失败时保守拒绝。
+
+帖子可按 author 分片，tweet ID 需能路由或通过映射服务定位。不要只写“按 user_id 分片”而忽略反向粉丝查询。
 
 ---
 
-## 14. 完整 Case Study：微博风格
+## 5. Push、Pull 与混合模型
 
-### 14.1 架构图
+| 模型 | 发帖路径 | 读路径 | 优点 | 代价 |
+|---|---|---|---|---|
+| Push | 写入粉丝 inbox | 直接读 inbox | 读快 | 写放大 |
+| Pull | 只写作者帖子流 | 读时合并关注作者 | 写轻 | 读放大 |
+| 混合 | 普通作者 Push，大 V Pull | inbox + 大 V 流归并 | 平衡 | 实现复杂 |
 
-```mermaid
-flowchart TB
-    subgraph client [客户端]
-        App[移动 App / Web]
-    end
+### 5.1 阈值必须由预算推出
 
-    subgraph gw [接入]
-        LB[LB]
-        API[API Gateway]
-    end
+不能把“1 万粉”当固定真理。一个作者是否 Push，可由下式判断：
 
-    subgraph svc [核心服务]
-        TweetSvc[Tweet 服务]
-        TimelineSvc[Timeline 服务]
-        RelationSvc[关系服务]
-        UserSvc[用户服务]
-        RankSvc[Ranking 可选]
-    end
-
-    subgraph async [异步]
-        MQ[Kafka]
-        FanoutW[Fanout Worker]
-    end
-
-    subgraph cache [缓存]
-        Redis[(Redis Cluster)]
-        Local[本地缓存]
-    end
-
-    subgraph db [存储]
-        MySQL[(MySQL 分片)]
-        ES[(Elasticsearch 搜索)]
-    end
-
-    App --> LB --> API
-    API --> TweetSvc
-    API --> TimelineSvc
-    API --> RelationSvc
-
-    TweetSvc --> MySQL
-    TweetSvc --> MQ
-    MQ --> FanoutW
-    FanoutW --> RelationSvc
-    FanoutW --> Redis
-
-    TimelineSvc --> Redis
-    TimelineSvc --> Local
-    TimelineSvc --> MySQL
-    TimelineSvc --> RankSvc
-
-    RelationSvc --> MySQL
-    RelationSvc --> Redis
-
-    TweetSvc --> ES
+```text
+预计 fan-out 成本
+= 粉丝数
+× 活跃粉丝比例
+× 单次写入成本
+× 作者发帖频率
 ```
 
-### 14.2 发帖时序（混合 Fan-out）
+还要满足：
 
-```mermaid
-sequenceDiagram
-    participant U as 用户
-    participant T as TweetService
-    participant DB as MySQL
-    participant R as Redis
-    participant MQ as Kafka
-    participant F as FanoutWorker
-    participant Rel as RelationService
+- 当前 fan-out 集群剩余写预算；
+- 目标可见性延迟；
+- 作者是否在突发热点名单；
+- Redis 内存与复制带宽；
+- 是否允许只 Push 给近期活跃粉丝。
 
-    U->>T: POST /tweets
-    T->>DB: INSERT tweet
-    T->>R: ZADD user_tweets:author
-    T->>R: GET follower_count:author
-    alt 粉丝 < 1万
-        T->>MQ: FanoutPushTask
-        MQ->>F: consume
-        F->>Rel: 分页查粉丝
-        F->>R: 批量 ZADD timeline:fanId
-    else 大 V
-        Note over T: 跳过 Push，仅 Pull 路径可见
-    end
-    T-->>U: tweetId
+阈值应可配置、可观测，并允许按作者动态调整。
+
+### 5.2 推荐策略
+
+- 普通作者：异步 Push 到活跃粉丝 timeline。
+- 大 V：不做全量 Push，只维护作者帖子流。
+- 冷用户：不长期保存 inbox，首次访问时 Pull 最近窗口。
+- 热点公共内容：进入独立热点召回，不塞入所有用户 timeline。
+- 推荐流：与关注流分开召回，再统一排序。
+
+---
+
+## 6. 发帖链路：DB 与 outbox 同事务
+
+### 6.1 错误做法
+
+```text
+INSERT tweet
+COMMIT
+publish Kafka
 ```
 
-### 14.3 读 Feed 时序
+如果进程在 COMMIT 后、publish 前崩溃，帖子永久没有 fan-out 事件。Kafka 的“至少一次”只能保证进入 Kafka 之后，不会修复这个窗口。
+
+### 6.2 正确事务
+
+```text
+BEGIN
+1. INSERT tweets
+2. INSERT feed_outbox(event_id, type='TWEET_CREATED')
+COMMIT
+```
+
+Outbox publisher：
+
+1. 短事务用 `FOR UPDATE SKIP LOCKED` 领取到期事件并写租约；
+2. 事务提交后再发布 Kafka，不能持有 DB 行锁等待网络；
+3. Kafka key 使用 author_id，保持同作者事件顺序；
+4. 发布成功后标记 `published_at`；
+5. 若发布成功但标记前崩溃，事件会重复发布，消费者必须幂等。
+
+Go 的 `TweetService.Create` 只调用一个 `WithTx`，在同一回调中 `InsertTweet` 与 `InsertOutbox`。`WithTx` 必须传播 commit 错误；客户端超时重试时，Idempotency-Key 返回原 tweet。
+
+---
+
+## 7. Fan-out Worker 与幂等
 
 ```mermaid
 sequenceDiagram
-    participant U as 用户
-    participant TL as TimelineService
-    participant R as Redis
+    participant API as Go Tweet API
     participant DB as MySQL
+    participant OB as Outbox Publisher
+    participant K as Kafka
+    participant W as Fanout Worker
+    participant R as Redis
 
-    U->>TL: GET /feed?cursor=xxx
-    TL->>R: ZREVRANGE timeline:uid
-    TL->>TL: 识别关注中的大V列表
-    TL->>R: 批量 ZREVRANGE user_tweets:bigV
-    TL->>TL: 多路归并 Top 20
-    TL->>DB: 批量查 tweet 详情（Miss 时）
-    TL-->>U: Feed JSON + nextCursor
+    API->>DB: transaction: tweet + outbox
+    DB-->>API: commit
+    API-->>API: 201 Created
+    OB->>K: TWEET_CREATED, key=author_id
+    K->>W: at-least-once delivery
+    W->>DB: page active followers
+    W->>R: pipeline ZADD timeline
+    W->>R: ZADD author_tweets
 ```
 
-### 14.4 可选：实时推送
+工程规则：
 
-新帖 Fan-out 完成后，对 **在线粉丝** 通过 [SSE/WebSocket](../Java/16-SSE与WebSocket实时通信.md) 推送 `{type: "new_tweet", tweetId}`，客户端增量刷新或插入顶部。
+- timeline member 只存 tweet ID，`ZADD` 对同一 member 天然幂等；
+- follower 分页必须使用稳定 cursor，不使用深 OFFSET；
+- 大任务拆成有 `task_id + page_cursor` 的 chunk，便于重试和观测；
+- worker 处理成功后再提交 Kafka offset；
+- poison event 有限重试后进 DLQ，并保留原 event_id；
+- Redis 写失败不删除源事件，重试或进入修复队列；
+- `author_tweets` 也是派生数据，可由 tweets 表重建。
+
+发帖 API 成功不等于所有粉丝已经可见；响应和产品提示应接受秒级传播延迟。
+
+---
+
+## 8. Redis Timeline 与正确 Cursor
+
+### 8.1 Key 与值
 
 ```text
-FanoutWorker 完成 ZADD →  Pub/Sub 或 Push 服务 → WS 连接
+timeline:{user_id}      ZSet，Push 候选
+author_tweets:{user_id} ZSet，作者帖子流
+tweet:{tweet_id}        String/Hash，正文缓存
+user:{user_id}          String/Hash，作者缓存
 ```
 
-非必须，但面试加分。
+timeline 只保留最近 N 条，例如 1000。N 由用户刷新频率、离线时长和内存预算决定。
 
-### 14.5 Case Study 手把手步骤表
+### 8.2 不要把完整 Snowflake 当 score
 
-| 步骤 | 场景 | 你的动作 | 预期结果 | 若不对 |
-|------|------|----------|----------|--------|
-| 1 | 发帖 | INSERT `tweets` + ZADD `user_tweets:author` | tweet 持久化 | 只写 Redis → 丢数据 |
-| 2 | 发帖 | GET `follower_count:author` | 判断 Push/Pull | 每次扫粉丝表 → 慢 |
-| 3 | 发帖 | 粉丝 <1万：发 MQ FanoutTask | API 快速 201 | 同步 fan-out → 超时 |
-| 4 | Fan-out | 分页读粉丝列表批量 ZADD | 粉丝 inbox 更新 | 一次拉千万粉丝 → OOM |
-| 5 | 发帖 | 大 V：跳过 Push | 只写 author 时间线 | 强 Push → 小时级延迟 |
-| 6 | 读 Feed | ZREVRANGE `timeline:uid` | Push 部分候选 | 无裁剪 → ZSet 无限涨 |
-| 7 | 读 Feed | 批量拉大 V `user_tweets` | Pull 部分候选 | 漏 merge → 看不到大 V |
-| 8 | 读 Feed | 小顶堆归并 Top 20 | 统一排序 | offset 分页 → 漏帖 |
-| 9 | 读 Feed | Hydrate 批量查正文 | 完整 JSON | N+1 查询 → RT 爆炸 |
-| 10 | 可选 | WS 推 `{new_tweet}` 给在线粉丝 | 近实时 | 强依赖 Push 完成 |
+Redis ZSet score 是 double，只能精确表示到 `2^53`。完整 64 位 Snowflake 通常超过此范围。
 
-### 14.6 Redis ZSet 读 Feed 逐行读
+推荐：
 
-| 命令/代码 | 含义 | 改错会怎样 |
-|-----------|------|------------|
-| `ZADD timeline:uid score tweetId` | score 常用时间戳 ms | score 乱序 → 时间线乱 |
-| `ZREVRANGE 0 19` | 最新 20 条 | 用 RANGE 升序 → 旧帖在前 |
-| `ZREMRANGEBYRANK` 保留 1000 | 裁剪 inbox | 不裁剪 → 内存爆 |
-| `ZREVRANGEBYSCORE (cursor -inf` | cursor 分页 | 用 OFFSET → 漏帖重复 |
-| `ZADD` 幂等 | 同 tweetId 重复 fan-out | 无幂等 → 重复条目 |
+- score：`created_at.UnixMilli()`，当前数量级远小于 `2^53`；
+- member：固定宽度 20 位十进制 tweet ID；
+- cursor：`(last_score, last_member, as_of)`。
+
+固定宽度使同 score 下的字典序与数值序一致。
+
+```go
+type FeedCursor struct {
+	Score  int64  `json:"s"`
+	Member string `json:"m"`
+	AsOfMS int64  `json:"a"`
+}
+```
+
+### 8.3 同毫秒边界
+
+`ZREVRANGEBYSCORE` 没有“再传一个 last_id”参数。下一页应：
+
+1. 以 `last_score` 为 inclusive max 读取一批；
+2. 对 `score == last_score` 的成员，跳过 `member >= last_member`；
+3. 接收更小 member 或更小 score；
+4. 若同毫秒数据太多导致不足一页，继续扩大批次；
+5. 用最后一条的 score/member 生成 next_cursor。
+
+伪代码：
+
+```go
+func afterCursor(item Item, c FeedCursor) bool {
+	if item.Score < c.Score {
+		return true
+	}
+	if item.Score > c.Score {
+		return false
+	}
+	return item.Member < c.Member
+}
+```
+
+首次请求固定 `as_of`，后续页不接收比该快照更新的候选，避免翻页期间新帖插入造成漂移。
+
+### 8.4 混合归并
+
+读取 Feed 时：
+
+1. 读取 Push timeline 的候选；
+2. 读取当前关注的大 V 列表；
+3. 批量读取各大 V 的 `author_tweets`；
+4. 用大小为“来源数”的堆做多路归并；
+5. Hydrate 正文和作者；
+6. 按删除、关系、屏蔽和可见性做最终过滤；
+7. 候选不足时继续向后取。
+
+合并 k 路、返回 n 条，典型复杂度约为初始化 `O(k)` 加 `O(n log k)`，不是 `O(k log n)`。
 
 ---
 
-## 15. 与 Twitter 风格对照
+## 9. 关注、取关、删除与屏蔽语义
 
-| 维度 | Twitter 早期 | Twitter 混合 | 微信朋友圈 |
-|------|--------------|--------------|------------|
-| 关系 | 单向 | 单向 | 双向 |
-| 模型 | Pull 为主 | Push + Pull 大V | Push |
-| 排序 | 时间 + 推荐 | Algorithmic | 时间 |
-| 分页 | Cursor | Cursor | Cursor |
-| 存储 | Manhattan + Redis | 多层 cache | 定制 |
+### 9.1 关注
 
-### 15.1 Case Study 变体：微信朋友圈（纯 Push）
+- MySQL 唯一键保证重复关注幂等；
+- 可异步把作者最近 20～50 条回填到新粉丝 timeline；
+- 回填只是体验优化，读路径仍可临时 Pull；
+- 关系事件也应使用 outbox，避免双邻接视图永久不一致。
 
-**场景**：双向好友、平均 150 人、上限 5000；**无大 V** 问题；纯时间序。
+### 9.2 取关
+
+取关成功后，旧 timeline 里可能仍有该作者 tweet ID。正确做法：
+
+1. Feed Hydrate 前按权威关注关系过滤，立即不可见；
+2. 后台异步清理旧成员，减少以后过滤成本；
+3. 不要求同步扫描并删除作者所有历史 tweet，否则接口延迟不可控。
+
+### 9.3 删除帖子
 
 ```text
-发帖 → 查好友列表（≤5000）→ 同步或 MQ Push 到每个好友 timeline
-读 Feed → 直接 ZREVRANGE timeline:uid
+transaction:
+  tweets.status = DELETED
+  tweets.deleted_at = now
+  insert outbox TWEET_DELETED
 ```
 
-| 对比微博混合模型 | 朋友圈 |
-|------------------|--------|
-| 关系 | 双向 vs 单向 |
-| Fan-out 上限 | 5000 有界 |
-| 大 V | 基本无 |
-| 模型 | **纯 Push 可行** |
-| 存储 | 可按用户分片 inbox |
+读路径 Hydrate 时发现已删除立即过滤；消费者再从作者流和常见 timeline 异步 ZREM。不能只删 Redis，因为遗漏的 timeline 会继续展示。
 
-**面试话术**：「若面试官说朋友圈，我会先确认 **双向好友 + 人数上限**，则 Push 简单可行；微博必须混合。」
+### 9.4 屏蔽
+
+屏蔽属于更严格的安全/隐私语义：
+
+- DB 事务写 block，并删除相关 follow 关系；
+- 读路径对双方都做权威过滤；
+- 缓存失败时应保守拒绝展示，而不是 fail-open；
+- 异步清理双方 timeline；
+- 解除屏蔽不自动恢复关注，除非产品明确规定。
+
+### 9.5 可见性变更
+
+从公开改为仅粉丝或仅自己可见，与删除类似：权威字段先提交，读时过滤立即生效，outbox 负责清理派生 timeline。
 
 ---
 
-## 16. 15 分钟模拟面试提纲
+## 10. Redis 丢失与重建
+
+Redis timeline 不是唯一数据源。重建流程：
+
+1. 标记用户 timeline 为 rebuilding，避免并发重复重建；
+2. 查询权威 following 列表；
+3. 批量读取各作者最近时间窗口内的帖子；
+4. 多路归并取最近 N 条；
+5. pipeline 写入新临时 key；
+6. 原子 RENAME 或版本化切换；
+7. 记录耗时、候选数和失败原因。
+
+冷用户可以只在首次打开时重建最近 7 天或第一屏；后台再补齐。Redis 故障期间允许退化为有限 Pull，但必须限流，避免把 14 万 QPS 乘以 200 打向数据库。
+
+---
+
+## 11. 缓存策略
+
+优先缓存稳定、可复用对象：
+
+- tweet 正文；
+- 用户资料；
+- 关系批次；
+- 作者最近帖子；
+- 首页第一屏可做极短 TTL。
+
+不建议默认缓存每个用户、每个 cursor 的完整响应，组合基数过高且失效困难。
+
+缓存规则：
+
+- 不存在或删除的 tweet 使用短负缓存；
+- 热 tweet 回源使用 singleflight；
+- TTL 加抖动；
+- 删除、屏蔽等安全语义不能只依赖慢 TTL；
+- Redis 故障时设置短超时和有界降级，防止请求堆积。
+
+---
+
+## 12. 故障矩阵
+
+| 故障 | 行为 | 恢复 |
+|---|---|---|
+| Outbox publisher 停止 | 发帖仍落 DB，Feed 延迟增加 | backlog 告警，恢复发布 |
+| Kafka 重复消息 | ZADD 重复不产生重复成员 | event/task 幂等 |
+| Fan-out 中途崩溃 | 部分粉丝已可见 | chunk 重试、ZADD 幂等 |
+| Redis timeline 丢失 | 源帖子不丢 | 按用户重建 |
+| Redis 全部不可用 | 发帖可继续落 DB；Feed 限量 Pull/503 | 熔断、恢复预热 |
+| MySQL 不可用 | 不能发帖/改关系 | 缓存 Feed 可有限只读 |
+| 删除事件积压 | Hydrate 仍过滤删除状态 | 异步 ZREM 追平 |
+| 屏蔽缓存不可用 | 保守不展示 | 查 DB 或失败关闭 |
+| Ranking 服务超时 | 返回时间序结果 | 降级指标与告警 |
+
+---
+
+## 13. 可观测性与 SLO
+
+### 13.1 指标
 
 ```text
-1. 需求（2 min）：发帖、Feed、关注；读 QPS >> 写
-2. 模型（3 min）：Push 读快写放大；Pull 相反；混合阈值
-3. 大 V（2 min）：不 Push；读时 merge
-4. 存储（2 min）：tweet 表 + Redis ZSet timeline；Schema
-5. 分页（1 min）：cursor + ZREVRANGEBYSCORE
-6. 扩展（3 min）：MQ 异步 fan-out、Ranking、缓存
-7. 取舍（2 min）：最终一致 timeline；5s 可见可接受
+feed_request_duration_seconds
+feed_items_filtered_total{reason}
+feed_outbox_pending / feed_outbox_oldest_age_seconds
+feed_fanout_latency_seconds / feed_kafka_consumer_lag
+feed_timeline_rebuild_total{result}
+feed_redis_errors_total
 ```
 
----
+不要把 user_id、tweet_id 直接作为 Prometheus label。
 
-## 17. 常见面试追问
+关键告警：outbox 最老事件超时、fan-out P99 超过可见性 SLO、Kafka lag 持续上升、Redis eviction、Hydrate 过滤率或重建失败率突增。
 
-### Q1：Push 和 Pull 怎么选？
-
-**答**：没有银弹。关注少、读多、延迟敏感 → Push；大 V 多 → 混合。朋友圈 Push；微博/Twitter 混合。
-
-### Q2：Fan-out 失败怎么办？
-
-**答**：MQ 重试 + 死信；粉丝 inbox 可重建（从 follow 表 + tweet 表 Pull 修复）。
-
-### Q3：取消关注后 timeline 怎么处理？
-
-**答**：Lazy 删除（读时过滤）或异步 ZREM 该作者 tweet_id（需维护 tweet→author 映射）。
-
-### Q4：如何保证不漏帖？
-
-**答**：Push 路径靠 MQ 至少一次 + 幂等 ZADD；Pull 路径靠多路归并完整性；cursor 分页防重复漏。
-
-### Q5：Feed 和搜索区别？
-
-**答**：Feed 是关注闭集内的时序/排序；搜索是全站 ES 倒排索引，架构分离。
-
-### Q6：朋友圈为什么可以纯 Push？
-
-**双向好友**、人数上限约 5000，fan-out 有界；微博/Twitter **单向关注 + 大 V** 必须混合。
-
-### Q7：Fan-out Worker 分区键怎么设？
-
-按 **authorId** 分区保证同作者发帖顺序；消费者 **水平扩展**；批量大小 500～2000 粉丝/批 权衡 RT 与吞吐。
-
-### Q8：timeline 存 Redis 丢了怎么办？
-
-tweet **源表 MySQL 持久化**；inbox 可从 `follows` + `tweets` **重建**（慢路径）；生产 Redis 持久化 + 多副本。
-
-### Q9：算法排序和时间序能共存吗？
-
-**双模式**产品开关；inbox 存 tweet_id，**读时 Ranking 打分重排**；或维护两套 timeline（成本高）。
-
-### Q10：冷用户首次打开慢怎么优化？
-
-inbox 过期后 **Pull 重建**最近 7 天；或 **懒加载**第一屏 + 后台预热。
-
-### Q11：与 08 短链的 Redis 用法差异？
-
-短链 **String GET** 点查；Feed **ZSet 范围查询** + 归并；Feed key 更多、内存更大。
-
-### Q12：读 Feed 的 QPS 14 万怎么扛？
-
-**缓存** feed 响应短 TTL、tweet 正文缓存、**cursor** 稳定查询；热用户 **本地缓存**；Ranking **离线预计算**减负。
+至少演练 outbox 停止后追平、消息重复、worker 半途崩溃、删帖事件延迟、timeline 重建、Redis 故障降级和同毫秒 cursor。
 
 ---
 
-## 18. 分级练习
+## 14. 与短链项目的能力迁移
 
-### 18.1 基础档
+| 短链项目 | Feed 进阶 |
+|---|---|
+| Cache Aside，MySQL 为权威 | timeline 是可重建派生数据 |
+| cache outbox | tweet/follow/delete outbox |
+| Redis Streams/worker 幂等 | Kafka fan-out 与 chunk 幂等 |
+| 列表复合 cursor | Feed score/member/as_of cursor |
+| 禁用/删除 tombstone | 删除/屏蔽读时权威过滤 |
+| Redis 故障回源 | Redis timeline 丢失后重建 |
+| consumer lag 指标 | fan-out 可见性 SLO |
 
-1. 画 Push vs Pull 对比表（写路径、读路径、优缺点）
-2. 解释为何大 V 不能纯 Push
-3. 写 Redis ZADD + ZREVRANGE 读 Feed 伪代码
-
-### 18.2 进阶档
-
-1. 设计 `follows` + `tweets` 表及索引
-2. 200 关注 Pull 模型：如何用堆归并 Top 20
-3. 设计 cursor 分页 API 与 `ZREVRANGEBYSCORE` 参数
-
-### 18.3 挑战档
-
-1. 完整混合 Fan-out：阈值 1 万，画 Mermaid 架构
-2. 设计 Fan-out Worker 批量大小、MQ 分区键
-3. 45 分钟模拟 Feed + 算法排序 Ranking 服务
-
-### 18.4 参考答案要点
-
-**混合阈值**：粉丝 < 1万 Push；≥ 1万 Pull merge。
-
-**Cursor**：用 `(score, tweet_id)` 元组；下一页 `ZREVRANGEBYSCORE key (last_score (last_id`。
+短链先帮你练“一个 code 的读热点”；Feed 再练“每个用户一条时间线”的高基数派生数据。
 
 ---
 
-## 19. 学完标准
+## 15. 面试与练习
 
-| 标准 | 自检 |
-|------|------|
-| ⬜ 知道 | Push/Pull 定义、大 V 问题、ZSet 存 timeline |
-| 🔶 会用 | 画混合架构；写 cursor 分页；设计 follows 表 |
-| ✅ 会讲 | 15 分钟 Case；对比 Twitter/微博；讲 Fan-out 异步 |
+15 分钟顺序：范围与容量 → Push/Pull 放大 → 动态阈值 → outbox/fan-out → cursor → 关系与故障。
 
-**量化目标**：
+闭卷回答：
 
-- [ ] 3 分钟讲清 Push vs Pull vs 混合
-- [ ] 5 分钟画完整架构 + 发帖/读 Feed 时序
-- [ ] 能答大 V、分页、缓存三个追问
-- [ ] 知道 ZSet score 用 timestamp 还是 tweet_id
+1. DB 已提交但 MQ 未发送如何修复？
+2. 为什么完整 Snowflake 不能直接作为 ZSet score？
+3. 同毫秒 100 条帖子如何验证不重不漏？
+4. 取关与删帖如何立即生效又避免同步扫全量 timeline？
+5. 大 V 阈值怎样由写预算和 SLO 推出？
 
----
-
-## 20. 与其他章节的关系
-
-| 章节 | 关联 |
-|------|------|
-| [03 缓存](./03-缓存架构设计.md) | 热 Feed、tweet 正文缓存 |
-| [04 MQ](./04-消息队列架构设计.md) | 异步 Fan-out |
-| [05 DB 扩展](./05-数据库扩展与读写分离.md) | tweet、follow 分片 |
-| [06 CAP](./06-分布式一致性与CAP.md) | Timeline 最终一致 |
-| [08 短链](./08-短链服务设计.md) | 读热点、Redis、MQ 统计类比 |
+能解释 outbox、复合 cursor、派生数据重建和三种关系变更语义，即达到本章要求。
 
 ---
 
-## 21. 我的笔记区
-
-```text
-Push/Pull 选择：
-大 V 阈值：
-分页方案：
-是否算法排序：
-模拟面试日期：
-```
-
----
-
-## 23. 闭卷自测
-
-完成后再看 §23.1 参考答案。
-
-1. **概念** Push 与 Pull 在写路径、读路径各做什么？
-2. **概念** 为何大 V 不能对千万粉丝纯 Push？
-3. **概念** 混合模型阈值（如 1 万粉）两侧策略是什么？
-4. **概念** Redis ZSet 存 timeline 时 score 常用什么？
-5. **概念** offset 分页为何漏帖？cursor 如何解决？
-6. **概念** 异步 Fan-out 对发帖 API 的意义？
-7. **动手** 写 `ZADD` + `ZREVRANGE` 读最新 20 条伪代码。
-8. **动手** `follows` 表两个索引分别服务什么查询？
-9. **综合** 200 关注 Pull 模型如何用堆归并 Top 20？
-10. **综合** 取消关注后 timeline 如何处理？（Lazy vs ZREM）
-
-### 23.1 自测参考答案
-
-1. Push 写时扩散到粉丝 inbox；Pull 读时聚合关注者近期帖。  
-2. 千万次 ZADD 不可完成；写放大爆炸。  
-3. <1万 Push；≥1万只写 author，读者 merge Pull。  
-4. 发布时间戳 ms 或 Snowflake tweet_id（单调）。  
-5. 翻页时新帖插入导致位移；cursor 用最后一条 score/id 锚定。  
-6. 发帖 API 毫秒返回，fan-out 后台完成，削峰。  
-7. `ZADD timeline:uid ts tweetId`；`ZREVRANGE timeline:uid 0 19`。  
-8. `follower_id` 查关注谁；`followee_id` 查粉丝列表 fan-out。  
-9. 200 路各取头元素入最小堆，弹堆顶 20 次，O(200 log 20)。  
-10. Lazy 读时过滤；或异步 ZREM 该作者 tweet_id 集合。
-
----
-
-## 24. 费曼检验
-
-请在不看资料的情况下，用 **3 分钟**向朋友解释：**「发微博后，粉丝多久能在首页看到？系统背后分几步？」**
-
-**对照提纲（能说到即过关）**：
-
-1. **发帖** 先落 DB，API 快速返回。  
-2. **普通用户** MQ 异步 fan-out 写粉丝 `timeline` ZSet。  
-3. **大 V** 不 push，粉丝读时 **pull merge**。  
-4. **最终一致** 秒级可见；在线可选 WS 推送增量。
-
----
-
-## 25. 延伸阅读
-
-- [Java/07 Redis ZSet](../Java/07-Redis核心原理与缓存实战.md)
-- [Java/16 SSE/WebSocket](../Java/16-SSE与WebSocket实时通信.md) — 可选实时推送
-- [数据结构/07 堆](../数据结构/04-树形结构/05-堆.md) — K 路归并
-- Twitter Engineering Blog（Fan-out 相关文章）
-- [Java/14 场景面试](../Java/14-高频场景设计与面试专题.md)
-
----
-
-上一章：[08-短链服务设计](./08-短链服务设计.md)  
-下一章：[10-面试专题与知识点总表](./10-面试专题与知识点总表.md)
-
-*本章已按 EXPANSION-STANDARD 扩充（§0+Case 步骤表+ZSet 逐行读+FAQ+闭卷自测+费曼）。*
-
-**EXPANSION-STANDARD 自检**：☑ §0 ☑ Case 步骤表 §14.5 ☑ ZSet 逐行读 §14.6 ☑ FAQ≥12 ☑ 闭卷 10 题 §23 ☑ 费曼 §24
+- 上一章：[08-短链服务设计](./08-短链服务设计.md)
+- 总复习：[10-面试专题与知识点总表](./10-面试专题与知识点总表.md)

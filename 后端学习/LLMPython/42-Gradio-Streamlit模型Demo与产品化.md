@@ -38,7 +38,7 @@
 - Gradio 5：`ChatInterface`、`Blocks`、流式输出
 - Streamlit：`st.chat_message`、session state
 - 挂载 LoRA adapter、多模型切换
-- Docker 部署 Demo（配合 [Linux 11](../Linux/11-Docker入门与镜像构建.md)）
+- Docker 部署 Demo（配合 [Linux 11](../Linux/07-Docker与Compose.md)）
 - HuggingFace Spaces 零成本托管
 - 与 [AIAgent](../AIAgent/00-学习路线图与说明.md) Java 产品层的分工
 

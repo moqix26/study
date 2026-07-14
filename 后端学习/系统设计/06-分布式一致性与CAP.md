@@ -1,979 +1,538 @@
 # 分布式一致性与 CAP
 
-<!-- 修改说明: 2026-06-30 按 EXPANSION-STANDARD 扩充 §0、Case 步骤表、FAQ≥12、闭卷自测、费曼检验 -->
+> 前置：[04-消息队列架构设计](./04-消息队列架构设计.md)、[05-数据库扩展与读写分离](./05-数据库扩展与读写分离.md)
+> 目标：先从故障和业务不变量出发，再理解一致性模型、CAP、quorum 与分布式事务方案。
+> 原则：Go 后端优先，原理保持语言和框架中立。
 
-> **文件编码**：UTF-8  
-> **定位**：在 [05 数据库扩展与读写分离](./05-数据库扩展与读写分离.md) 把数据拆到多副本、多分片之后，**「多个节点上的数据是否、何时一致」**成为系统设计核心。本章系统讲 CAP、PACELC、BASE、一致性级别与分布式事务选型。  
-> **扩展阅读**：[Java/12 高并发与分布式系统基础](../Java/12-高并发与分布式系统基础.md) §16 CAP、§29 分布式事务；[Java/11 微服务](../Java/11-微服务与SpringCloud基础.md) Seata/TCC 概述。
+## 1. 定位与学习分层
 
----
+分布式一致性的核心不是背 CAP，而是回答：超时后操作是否执行、部分成功时不变量是否成立、读允许多旧，以及重试和崩溃后如何收敛。
 
-## 0. 读前导读（零基础也能跟上）
+### 1.1 现在必须掌握
 
-### 0.1 用一句话弄懂本章
+超时代表结果未知；先写业务 invariant；本地事务优先；at-least-once 必须配合原子幂等；Outbox 与 Inbox 分属生产者和消费者。
 
-**一句话**：数据拆到多台机器后，**不可能处处像单机 MySQL 一样立刻一致**——本章教你 CAP 怎么取舍、BASE 怎么落地，以及 **2PC / TCC / Saga / 本地消息表** 该何时选。
+### 1.2 面试阶段再深化
 
-### 0.2 你需要提前知道什么
+理解线性一致、串行化、CAP/PACELC、quorum，以及 Saga、TCC、XA/2PC 的恢复语义。
 
-| 你已会 | 可以直接学本章 |
-|--------|----------------|
-| [05 读写分离/分片](./05-数据库扩展与读写分离.md) | ✅ 本章 |
-| [03 Cache Aside](./03-缓存架构设计.md) | ✅ 本章 |
-| [Java/12 §16 CAP](../Java/12-高并发与分布式系统基础.md) 扫过 | ✅ 本章 |
-| 完全不懂事务 ACID | 先 [Java/06 MySQL](../Java/06-MySQL基础索引与事务.md) §事务 |
+### 1.3 生产阶段必须补齐
 
-### 0.3 本章知识地图（学完后应能勾选全部 ☐→☑）
+补齐对账审计、状态机版本、墓碑清理、租约与 fencing、故障注入和 RPO/RTO。
 
-- ☐ 30 秒内讲清 **CAP**，说明分区时 C/A 二选一
-- ☐ 能解释 **PACELC** 与 CAP 区别
-- ☐ 对比 **2PC / TCC / Saga / 本地消息表 / MQ 事务消息**（至少 4 项）
-- ☐ 能口述 **跨服务库存扣减** Case（outbox + 幂等 + 补偿）
-- ☐ 能分析 **缓存 DB 不一致** 的并发窗口与 3 种解法
-- ☐ 明确 **分布式锁 ≠ 分布式事务**
-- ☐ 闭卷自测（§23）≥ 8/10
+## 2. 第一原则：超时意味着结果未知
 
-### 0.4 建议学习时长与节奏
-
-| 阶段 | 内容 | 建议时长 |
-|------|------|----------|
-| 第 1 天 | §1～§5 CAP、PACELC、BASE、一致性光谱 | 2 h |
-| 第 2 天 | §6～§12 分布式事务方案对比 | 2.5 h |
-| 第 3 天 | §13～§16 锁、幂等 + 两个 Case Study | 2.5 h |
-| 第 4 天 | FAQ + 闭卷自测 + 费曼录音 | 1 h |
-
-### 0.5 学完本章你能做什么（可验证的具体动作）
-
-1. 白板画 CAP 分区取舍图，各举 ZK（CP）与 Cassandra（AP）例子
-2. 为「订单服务 + 库存服务」画出本地消息表 Mermaid 时序图
-3. 解释 TCC 的「空悬挂」并写出 Cancel 防悬挂伪代码
-4. 说明「先更 DB 再删缓存」优于反序的并发原因
-5. 回答面试官：「互联网高并发写路径为什么不用 XA？」
-
-### 0.6 核心术语三件套（首次出现速记）
-
-**CAP 定理（CAP Theorem）**：分区发生时，一致性与可用性不能兼得。  
-**生活类比**：快递站断网——要么拒收新件保账本对齐（C），要么继续收件但可能对不上账（A）。  
-**为什么重要**：所有分布式设计的理论底座。  
-**本章用到的地方**：§2、§17 面试速答
-
-**最终一致（Eventual Consistency）**：停止写入后，各副本经过一段时间收敛到相同值。  
-**生活类比**：朋友圈点赞数晚几秒刷新——可接受。  
-**为什么重要**：互联网 C 端默认模型。  
-**本章用到的地方**：§4 BASE、§14 库存 Case
-
-**本地消息表（Transactional Outbox）**：业务写库与写消息表同一本地事务，异步扫表发 MQ。  
-**生活类比**：收银同时写小票和「待发货便签」，店员按便签发货。  
-**为什么重要**：不依赖 MQ 事务特性，通用性最强。  
-**本章用到的地方**：§10、§14 Case Study 1
-
----
-
-## 本章与上一章的关系
-
-05 章你学会了读写分离和分片——架构上立刻出现三类一致性问题：
-
-1. **主从延迟**：写主读从，用户看到旧数据。
-2. **跨分片写**：订单库扣库存 + 积分库加积分，无法用一个本地 `@Transactional` 兜住。
-3. **缓存与 DB**：03 章 Cache Aside 下，Redis 与 MySQL 短暂不一致是常态还是 bug？
-
-05 章回答「数据放哪」；本章回答「**允许多长时间、多大范围的不一致**」以及「**用什么协议补偿**」。  
-[Java/12](../Java/12-高并发与分布式系统基础.md) 给了 CAP 词汇表和本地消息表简图——本章**加深理论 + 方案对比 + 两个完整 Case**。
-
-```mermaid
-flowchart TB
-    S05[05 读写分离/分片] --> Q1[复制延迟]
-    S05 --> Q2[跨分片事务]
-    S03[03 缓存] --> Q3[缓存 DB 一致]
-    Q1 --> S06[06 CAP 与一致性]
-    Q2 --> S06
-    Q3 --> S06
-```
-
----
-
-## 1. 为什么分布式系统无法「处处强一致」
-
-单机 MySQL 靠 **ACID + 单点时钟** 保证：事务提交后，下一次读必见新值。
-
-分布式下：
-
-- 网络会**分区**（机房光缆断、Pod 不可达）。
-- 复制是**异步**的（性能要求）。
-- 服务有**独立故障域**（订单服务活着、库存服务挂了）。
-
-因此设计目标从「永远一致」变成「**在业务可接受的前提下，选合适的一致性模型与补偿机制**」。
-
----
-
-## 2. CAP 定理
-
-### 2.1 三个字母含义
-
-| 字母 | 英文 | 含义 |
-|------|------|------|
-| **C** | Consistency | 所有节点同一时刻看到**相同**数据（线性一致性的强形式，面试常简化为此定义） |
-| **A** | Availability | 每个请求都能收到**非失败**响应（不保证最新） |
-| **P** | Partition tolerance | 网络分区发生时系统**继续工作**（不会整体停摆） |
-
-### 2.2 定理内容（面试标准表述）
-
-在存在**网络分区 P** 时，系统**不能同时**做到 C 和 A——必须在 **C 与 A 之间二选一**。
-
-```mermaid
-flowchart TD
-    P[网络分区发生] --> Choice{必须继续服务?}
-    Choice -->|选 A 可用| AP[返回可能旧数据<br/>最终一致]
-    Choice -->|选 C 一致| CP[拒绝写或读<br/>保数据正确]
-```
-
-### 2.3 为什么 P 实际上「必选」
-
-分布式系统跑在公网/多 AZ——**分区一定会发生**。所以真实取舍是：
+调用方在 deadline 到达时，只知道“没有及时收到响应”，不知道服务端处于哪种状态：
 
 ```text
-不是「CAP 三选二」，而是「分区时你要 C 还是 A」
+1. 请求根本没到服务端
+2. 请求到了，但尚未执行
+3. 已执行并提交，响应丢失
+4. 执行到一半，部分外部副作用已发生
+5. 服务端仍在执行，客户端已经重试
 ```
 
-### 2.4 例子 1：注册写主库，读从库（AP 倾向）
+因此写接口必须设计：稳定 `operation_id`、可查询状态、幂等重试、`PENDING/SUCCEEDED/FAILED` 状态机，以及长时间 PENDING 的对账任务。
 
-- 分区：应用连不上 Master，但能连 Replica。
-- 选 **A**：读从库返回旧 profile（可用但 stale）。
-- 选 **C**：读从库失败返回 503（不可用但避免脏读）。
+Go 的 context 只控制调用方等待时间，不保证远端事务回滚。遇到 `DeadlineExceeded` 应用同一 operation ID 查询或安全重试，而不是创建第二个业务对象。同步 RPC 和 MQ 发布确认都存在未知结果窗口。
 
-互联网 C 端多数选 **AP + 写后读主 + 最终一致**。
+## 3. 先定义业务不变量
 
-### 2.5 例子 2：Redis 哨兵选主（CP 倾向）
+业务不变量是任何故障和并发下都必须成立的条件。
 
-- 分区：旧 Master 与集群多数失联。
-- 选 **C**：旧 Master 拒绝写，避免**双主**。
-- 若旧 Master 仍接受写 → 脑裂，数据分叉。
+| 场景 | 不变量 |
+|---|---|
+| 转账 | 不能凭空增加或丢失资金；同一指令最多扣一次 |
+| 下单 | 库存不足不能进入可支付状态 |
+| 短链 | 同一租户内短码唯一；禁用后不能继续跳转 |
+| 优惠券 | 同一用户同一券最多核销一次 |
+| MQ 消费 | 同一消息重复投递不能重复改变业务状态 |
 
-### 2.6 例子 3：ZooKeeper / etcd（CP）
+设计顺序：
 
-- 选主需**多数派 quorum**。
-- 分区 minority 侧**不可用**（不能写也不能选主），保 **C**。
+1. 写出不变量。
+2. 找到维护该不变量的数据所有者。
+3. 尽量让相关写入落进一个本地事务。
+4. 若必须跨服务，定义中间态、重试、补偿和对账。
+5. 最后才选择 Outbox、Saga、TCC 或 XA。
 
-### 2.7 例子 4：银行转账（偏 CP + 复杂协议）
+“最终一致”不是允许最终结果错误，而是允许系统在明确时间窗口内存在可识别中间态，之后必须收敛到满足不变量的状态。
 
-- 余额不能错 → 宁可「服务繁忙」也不能双扣。
-- 常用：**同步复制、分布式事务、或单库集中账户**。
+## 4. 一致性模型
 
-### 2.8 CAP 常见误区
+一致性不是一条只有“强”和“弱”的直线。不同模型约束不同现象。
 
-| 误区 | 纠正 |
-|------|------|
-| 「我们的系统是 CP」 | 平时无分区时 C 和 A 都能满足；CAP 谈的是**分区瞬间** |
-| 「选了 AP 就不要一致」 | AP 多为**最终一致**，有补偿与读己之写策略 |
-| 「CAP 只有三种系统」 | 一致性和可用性是**光谱**，不是开关 |
+| 模型 | 保证 |
+|---|---|
+| 最终一致 | 停止更新后副本最终收敛，不自动承诺收敛时间 |
+| 读己之写 | 当前用户后续读取能看到自己的写 |
+| 单调读/写 | 会话不从新版本退回旧版本，写按发出顺序生效 |
+| 因果一致 | 有因果关系的操作按因果顺序可见 |
+| 线性一致 | 操作像在调用区间内某瞬间原子发生，并尊重实时顺序 |
+| 串行化 | 多事务结果等价于某种串行执行顺序 |
 
----
+会话保证可通过读 Primary、粘滞、版本/复制位点实现。线性一致与串行化是正交维度，不能用“ACID”或“强一致”一词全部代替。
 
-## 3. PACELC 扩展
+单机 MySQL 也要看隔离级别和事务边界。在 Repeatable Read 的旧快照事务中，即使另一个事务已经提交，当前事务仍可能读到旧版本；不能简单说“提交后任何下一次读都必见新值”。
 
-CAP 只描述**分区时**的取舍。**PACELC** 补全**正常无分区**时的 Latency vs Consistency：
+## 5. CAP 的准确含义
+
+CAP 针对的是一个复制数据系统在网络分区下能否同时满足线性一致与可用。
+
+| 字母 | 含义 |
+|---|---|
+| C — Consistency | 对外表现为线性一致的单副本 |
+| A — Availability | 每个到达非故障节点的请求最终得到有效响应 |
+| P — Partition | 节点之间的消息可能被任意延迟或丢失，形成分区 |
+
+当分区发生时：
+
+- 若仍让两侧都接受冲突操作，倾向保 A，可能暂时失去 C。
+- 若只有能确认权威状态的一侧继续处理，倾向保 C，另一侧失去 A。
+
+这不是“CAP 三选二”，也不是给整个产品永久贴 CP/AP 标签。真实系统常按操作、配置和故障阶段做不同选择。
+
+### 5.1 CP 倾向示例
+
+etcd/ZooKeeper 的多数派一侧可以继续提交；少数派不能提交。线性一致读还要使用相应的读语义，允许 stale 的本地读不自动具有线性一致性。
+
+### 5.2 AP 倾向示例
+
+Dynamo/Cassandra 类系统在特定低一致性级别下，可让分区两侧继续接受操作，之后依赖版本、冲突解决和修复收敛。把读写级别调为 quorum 后，可用性取舍也会变化。
+
+### 5.3 Redis 不是干净的 CAP 教材标签
+
+Redis 主从和 Sentinel 通常使用异步复制：
+
+- 故障转移可能丢失已被旧 Primary 确认但尚未复制的写；
+- 旧 Primary 在被隔离后不保证立即停止接受写；
+- `min-replicas-to-write` 只能降低风险，不构成完整共识协议；
+- Redis Cluster、Sentinel、单机和托管产品的行为也不同。
+
+因此不要简单背“Redis 是 AP”或“Sentinel 是 CP”。应描述具体拓扑、确认语义、故障转移和允许的数据损失。
+
+## 6. PACELC
+
+CAP 只突出分区期间的选择。PACELC 补充：
 
 ```text
 if Partition:
-    choose A or C   （同 CAP）
+    choose Availability or Consistency
 else:
     choose Latency or Consistency
 ```
 
-| 系统 | P 时 | EL 时 | 解读 |
-|------|------|-------|------|
-| Dynamo/Cassandra | AP | 低延迟，牺牲强一致 | L 优先 |
-| MongoDB 默认 | AP | 可调 write concern | 可偏 C |
-| MySQL 单主同步 | CP | 同步复制时延迟↑一致↑ | 无分区时仍要权衡复制策略 |
-| 纯缓存 Redis | AP | 极 L，弱 C | 业务层补偿 |
+无分区时，等待更多副本确认通常提高一致性或持久性，但会增加延迟并降低可用余量；异步复制延迟低，却可能读旧或在故障时丢最近写。
 
-**面试加分**：「我们无分区时选 **L**（异步复制 + 缓存）；分区时选 **A**（降级读旧数据），关键路径写后读主。」
+不要把 PACELC 分类写死到产品名上。Cassandra、MongoDB、MySQL、Kafka 等都可通过 read/write concern、复制确认、读路由和故障策略改变取舍。
 
----
+面试回答应落到配置：
 
-## 4. BASE 理论
-
-**BA** Basically Available — 基本可用（响应时间变长、功能降级仍服务）  
-**S** Soft state — 软状态（中间态允许存在）  
-**E** Eventually consistent — 最终一致（时间窗口后收敛）
-
-```mermaid
-flowchart LR
-    ACID[单机 ACID] -->|扩展| BASE[BASE 最终一致]
-    BASE --> T1[T0 用户下单]
-    T1 --> T2[T1 库存 MQ 未消费]
-    T2 --> T3[T2 库存扣完 一致]
+```text
+“订单确认写等待多数副本，牺牲部分延迟；商品详情读允许副本延迟，
+但用户刚修改后的读携带版本并回退 Primary。”
 ```
 
-与 ACID 对比：
+## 7. Quorum 与共识的最小知识
 
-| | ACID | BASE |
-|---|------|------|
-| 一致性 | 立即 | 最终 |
-| 隔离 | 强 | 业务层幂等 |
-| 典型 | 单库事务 | 缓存、MQ、主从 |
+### 7.1 读写 quorum
 
----
+假设有 N 个副本，写等待 W 个确认，读查询 R 个副本。`R + W > N` 可以让读写集合有交集，但**仅有交集并不自动得到线性一致**，还需要版本规则、冲突处理、并发写协议和故障恢复。
 
-## 5. 一致性级别光谱
+例如 N=3、W=2：少数派只有 1 个节点时不能确认新写，这就是用可用性换一致性/持久性的一部分。
 
-从弱到强（需能**举例**）：
+### 7.2 Leader 与多数派
 
-| 级别 | 说明 | 例子 |
-|------|------|------|
-| 读自己的写 | 用户改昵称后立即读必是新值 | 写后读主、Session 粘滞 |
-| 单调读 | 不会时间倒流 | 同一 Replica |
-| 因果一致 | 有因果关系的操作有序 | 评论回复链 |
-| 最终一致 | 停止写入后，各副本收敛 | 主从复制、Cache Aside |
-| 强一致/线性一致 | 读最新已提交写 | 单库事务、etcd quorum 读 |
+Raft 一类共识协议使用 term、leader 和多数派提交日志：
 
-```java
-// 最终一致：发 MQ 异步扣库存，订单状态先 CREATED
-orderMapper.insert(order);           // 本地事务提交
-rabbitTemplate.convertAndSend("stock.deduct", event);  // 可能延迟几秒
-// 此时查库存：Redis/DB 可能仍显示旧库存 → 业务接受 or 展示「处理中」
+- 同一 term 只有合法 leader 发起复制；
+- 日志被多数派持久化后才提交；
+- minority 无法自行提交新日志；
+- leader 变更后通过日志规则恢复唯一历史。
+
+共识主要解决复制状态和成员对“已提交顺序”的一致，不等同于任意业务跨服务事务。
+
+### 7.3 租约与时钟
+
+租约过期依赖时间和网络。旧持有者可能暂停后恢复并继续写，所以续期只能降低并发概率，不能证明旧持有者不会再操作。需要 fencing token 让下游拒绝旧持有者。
+
+## 8. ACID 与 BASE 不是二选一
+
+ACID 描述事务的原子性、一致性、隔离性和持久性。BASE 常用来概括分布式系统允许中间态并最终收敛的设计风格：
+
+- Basically Available：故障时保留核心能力或降级服务；
+- Soft State：系统可能存在由异步流程推进的中间状态；
+- Eventually Consistent：最终收敛到满足业务规则的结果。
+
+常见架构是：
+
+```text
+每个服务内部：ACID 本地事务
+服务之间：Outbox + 幂等 + 状态机 + 补偿，实现最终一致
 ```
 
-**秒杀/库存**：C 端展示可 **AP**；**扣减成功判定**必须业务层 **不超卖**（Redis Lua + DB 乐观锁），不等于全局强一致。
+BASE 不替代 ACID，幂等也不等于事务隔离。一个系统可以同时大量使用两者。
 
-### 5.1 一致性级别选型决策表（面试白板）
+## 9. 方案选择顺序
 
-| 业务场景 | 推荐级别 | 实现要点 | 别用什么 |
-|----------|----------|----------|----------|
-| 账户余额 | 强一致 | 单库事务 / TCC | 纯 Redis 扣款 |
-| 秒杀扣库存 | 业务不超卖 | Lua + 乐观锁 + 幂等 | XA 跨库 |
-| 商品详情缓存 | 最终一致 | Cache Aside + TTL | 强一致缓存 |
-| 点赞/阅读数 | 最终一致 | Redis INCR + 异步落库 | 同步双写 |
-| 配置/选主 | 线性一致 | etcd quorum | Redis 主从写 |
-| 订单+库存跨服务 | 最终一致 | 本地消息表 + 补偿 | 同步 Feign 链 |
+优先级通常是：
 
----
+1. **一个本地事务**：把必须原子的写放到同一服务、同一数据库。
+2. **本地事务 + Outbox/Inbox**：跨服务传播事实并最终一致。
+3. **Saga**：多步骤长流程，每步提交并提供补偿。
+4. **TCC**：业务资源可显式预留，需要更强的隔离感知。
+5. **XA/2PC**：参与者支持 prepare，能接受阻塞和协调成本。
 
-## 6. 分布式事务方案总览
+| 方案 | 中间态 | 业务侵入 | 主要风险 | 适合 |
+|---|---|---|---|---|
+| 本地事务 | 对外可隐藏 | 低 | 单库边界 | 强相关数据 |
+| Outbox/Inbox | 有 | 中 | 重复、延迟 | 事件驱动流程 |
+| Saga | 有且可见 | 中高 | 补偿失败 | 长业务流程 |
+| TCC | Try 预留 | 高 | 空回滚、悬挂 | 可冻结资源 |
+| XA/2PC | Prepare 锁定 | 框架相关 | in-doubt 阻塞 | 参与者少、强原子需求 |
 
-```mermaid
-flowchart TD
-    Need[跨服务写要一致] --> Q{强一致必须?}
-    Q -->|是 金融| TCC[TCC / XA 2PC]
-    Q -->|否 互联网主流| Async[最终一致]
-    Async --> LMT[本地消息表]
-    Async --> MQTM[MQ 事务消息]
-    Async --> Saga[Saga 长事务]
+不要以“金融就一定 TCC”或“互联网就一定 AP”替代实际不变量和故障分析。
+
+## 10. 本地事务优先
+
+如果订单头、订单项、操作幂等记录和待发布事件都属于订单聚合，应尽量放到同一分片，用一个 `sql.Tx` 提交。Go 代码的关键顺序是：
+
+```text
+BeginTx
+  → INSERT orders，operation_id 唯一
+  → INSERT order_items
+  → INSERT outbox
+  → Commit
 ```
 
-| 方案 | 一致性 | 性能 | 开发成本 | 典型场景 |
-|------|--------|------|----------|----------|
-| **2PC/XA** | 强 | 差（锁到 prepare） | 低（容器支持） | 传统银行，互联网少用 |
-| **TCC** | 可强 | 较好 | **高**（Try/Confirm/Cancel 三接口） | 支付、冻结金额 |
-| **Saga** | 最终 | 好 | 中（正向 + 补偿） | 长流程订单、旅行 |
-| **本地消息表** | 最终 | 好 | 中 | 订单 + 发 MQ |
-| **MQ 事务消息** | 最终 | 好 | 中 | RocketMQ 半消息 |
-| **Seata AT** | 最终 | 中 | 低 | 快速落地，有脏写风险需懂原理 |
+任一步失败都回滚。重复 `operation_id` 查询并返回原订单，而不是创建第二张订单。
 
----
+## 11. Outbox、Inbox 与原子幂等边界
 
-## 7. 两阶段提交（2PC / XA）
-
-### 7.1 流程
+完整机制见 [04-消息队列架构设计](./04-消息队列架构设计.md)。本章关注一致性语义：
 
 ```mermaid
 sequenceDiagram
-    participant C as 协调者
-    participant A as 参与者A
-    participant B as 参与者B
-    C->>A: prepare
-    C->>B: prepare
-    A-->>C: OK
-    B-->>C: OK
-    C->>A: commit
-    C->>B: commit
+    participant O as Order Service
+    participant OD as Order DB
+    participant M as MQ
+    participant I as Inventory Service
+    participant ID as Inventory DB
+
+    O->>OD: Tx: order + outbox
+    OD-->>O: Commit
+    O->>M: publish with confirm
+    M->>I: at-least-once delivery
+    I->>ID: Tx: inbox + business update + result outbox
+    ID-->>I: Commit
+    I-->>M: ACK
 ```
 
-### 7.2 问题
+必须接受两个重复窗口：
 
-1. **同步阻塞**：prepare 到 commit 资源锁住。
-2. **协调者单点**：协调者 hang 住，参与者不知 commit 还是 rollback。
-3. **性能**：跨库 RT × 2，高并发不适用。
+- Broker 已确认，Producer 更新 Outbox 前崩溃 → 再次发布。
+- Consumer 事务提交，ACK 前崩溃 → 再次投递。
 
-```java
-// Spring 理论上 @Transactional + JTA — 生产互联网极少用于高 QPS 路径
-// @Transactional  // JTA 跨数据源 — 了解即可
-```
+消费者处理的正确原子边界：
 
-**面试结论**：知道原理；**互联网高并发写路径不用 XA**。
+```go
+func applyEvent(ctx context.Context, db *sql.DB, e Event) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 
----
+	res, err := tx.ExecContext(ctx, `
+		INSERT IGNORE INTO inbox(consumer, message_id, processed_at)
+		VALUES ('inventory', ?, NOW())`, e.MessageID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return tx.Commit()
+	}
 
-## 8. TCC（Try-Confirm-Cancel）
-
-### 8.1 三阶段语义
-
-| 阶段 | 含义 | 库存例子 |
-|------|------|----------|
-| Try | 预留资源 | `frozen_stock += 1`，可用库存减 1 |
-| Confirm | 确认提交 | `frozen_stock -= 1`，扣真实库存 |
-| Cancel | 释放预留 | 回滚 frozen 与可用库存 |
-
-### 8.2 空悬挂、幂等、防悬挂
-
-- **空悬挂**：Cancel 比 Try 先到 → Cancel 需识别「无 Try 则忽略」。
-- **幂等**：Confirm/Cancel 重复调用结果相同。
-- **防悬挂**：Try 记录事务 ID，Cancel 检查 Try 是否存在。
-
-```java
-@Service
-public class InventoryTccService {
-
-    @Transactional
-    public boolean tryDeduct(String txId, Long skuId, int qty) {
-        if (tccLog.exists(txId, "TRY")) return true; // 幂等
-        int rows = jdbc.update(
-            "UPDATE stock SET available = available - ?, frozen = frozen + ? " +
-            "WHERE sku_id = ? AND available >= ?",
-            qty, qty, skuId, qty
-        );
-        if (rows == 0) return false;
-        tccLog.save(txId, "TRY", skuId, qty);
-        return true;
-    }
-
-    @Transactional
-    public void confirm(String txId) {
-        if (tccLog.exists(txId, "CONFIRM")) return;
-        TccRecord r = tccLog.getTry(txId);
-        jdbc.update(
-            "UPDATE stock SET frozen = frozen - ? WHERE sku_id = ?",
-            r.getQty(), r.getSkuId()
-        );
-        tccLog.save(txId, "CONFIRM", null, 0);
-    }
-
-    @Transactional
-    public void cancel(String txId) {
-        if (tccLog.exists(txId, "CANCEL")) return;
-        Optional<TccRecord> tryRec = tccLog.findTry(txId);
-        if (tryRec.isEmpty()) return; // 防悬挂
-        TccRecord r = tryRec.get();
-        jdbc.update(
-            "UPDATE stock SET available = available + ?, frozen = frozen - ? WHERE sku_id = ?",
-            r.getQty(), r.getQty(), r.getSkuId()
-        );
-        tccLog.save(txId, "CANCEL", null, 0);
-    }
+	if err := changeBusinessState(ctx, tx, e); err != nil {
+		return err
+	}
+	if err := insertResultOutbox(ctx, tx, e); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 ```
 
-**适用**：**必须**预留、可回滚的金融资源；开发量约为普通接口 3 倍。
+只有 Inbox 插入、业务更新和结果事件处于同一本地事务时，才能把“至少一次投递”转换为“恰好一次业务效果”。外部短信、支付接口还必须支持自己的幂等键或结果查询。
 
-### 8.3 Case Study 3：支付冻结（TCC 迷你场景）
+## 12. Saga
 
-**场景**：用户支付 100 元，需同时 **冻结余额** 与 **预留库存**；15 分钟内未支付自动释放。
+Saga 将长事务拆成多个已提交的本地事务，并为前面的成功步骤设计补偿。
 
-```mermaid
-sequenceDiagram
-    participant P as 支付编排
-    participant A as 账户服务
-    participant I as 库存服务
-    P->>A: Try 冻结 100
-    P->>I: Try 冻结 1 件
-    alt 都成功
-        P->>A: Confirm 扣款
-        P->>I: Confirm 扣库存
-    else 任一失败
-        P->>A: Cancel 解冻
-        P->>I: Cancel 释库存
-    end
-```
+### 12.1 两种组织方式
 
-| 步骤 | 动作 | 失败处理 |
-|------|------|----------|
-| 1 | 账户 Try：`balance -= 100, frozen += 100` | 余额不足直接失败 |
-| 2 | 库存 Try：`available -= 1, frozen += 1` | 失败则 Cancel 账户 |
-| 3 | 支付成功 Confirm 两边 | 幂等表防重复 Confirm |
-| 4 | 超时 MQ 触发 Cancel | 空悬挂检查 |
+| 模式 | 说明 | 风险 |
+|---|---|---|
+| Choreography 事件协同 | 服务监听事件并发布下一事件 | 流程分散、循环依赖难发现 |
+| Orchestration 集中编排 | 编排器持久化状态并发命令 | 编排器复杂、需高可用 |
 
-**面试结论**：金额类 **TCC**；普通电商下单 **outbox** 足够，别过度设计。
-
----
-
-## 9. Saga
-
-### 9.1 编排 vs 编排
-
-| 模式 | 说明 |
-|------|------|
-| **编排 Choreography** | 各服务监听事件，链式触发（MQ） |
-| **编排 Orchestration** | 中央 Saga 协调器发命令 |
-
-### 9.2 流程示例：订酒店 + 机票
+### 12.2 正向与补偿
 
 ```text
-正向：订机票 → 订酒店 → 扣款
-补偿：退款 ← 取消酒店 ← 取消机票（逆序）
+正向：创建行程 → 订机票 → 订酒店 → 扣款
+补偿：取消行程 ← 退机票 ← 退酒店 ← 退款
 ```
+
+补偿不是数据库 rollback：退款可能有手续费，短信无法撤回，释放的库存也可能被别人占用。生产 Saga 必须持久化流程状态，为每一步和补偿提供幂等键、有界重试、人工处置与对账，并尽量把不可补偿的 pivot step 放在后面。
+
+Saga 不自动提供隔离；其他请求可能看到中间态，因此需用 `PENDING/CANCELLING/DONE/FAILED` 等状态限制后续操作。
+
+## 13. TCC：正确处理空回滚与悬挂
+
+TCC 适合资源可显式预留的场景：
+
+| 阶段 | 库存示例 |
+|---|---|
+| Try | `available -= qty; frozen += qty` |
+| Confirm | `frozen -= qty`，确认消耗 |
+| Cancel | `available += qty; frozen -= qty`，释放预留 |
+
+每个事务分支使用唯一 `(global_tx_id, branch_id)` 和状态机。
+
+### 13.1 三个必须处理的问题
+
+- **幂等**：Confirm/Cancel 重复调用只生效一次。
+- **空回滚**：Cancel 先到、Try 从未成功，也要记录 `CANCELLED` 墓碑。
+- **悬挂**：Try 晚于 Cancel 到达时，看到墓碑后必须拒绝，不能再冻结资源。
+
+正确顺序示意：
+
+```text
+Cancel(global_tx_id, branch_id)
+  → 锁定或创建 branch row
+  → 若不存在 Try：插入 CANCELLED 墓碑并返回
+  → 若状态 TRY_SUCCEEDED：释放资源，条件更新为 CANCELLED
+  → 若已 CANCELLED：幂等返回
+
+Try(global_tx_id, branch_id)
+  → 锁定 branch row
+  → 若已 CANCELLED：拒绝执行，防悬挂
+  → 若已 TRY_SUCCEEDED：幂等返回成功
+  → 条件冻结资源，并写 TRY_SUCCEEDED
+```
+
+Go 落地时，`Cancel` 在一个 `sql.Tx` 中 `SELECT ... FOR UPDATE` 分支行：无记录则插入 `CANCELLED`；Try 也先锁同一唯一键，看到 `CANCELLED` 就拒绝。两个请求同时创建分支时依靠唯一约束让失败方重读状态，不能使用 `exists → update → save log` 这种非原子流程。
+
+TCC 在 Try 后会暴露冻结中间态，它是业务协议，不应直接描述成 CAP 意义的线性强一致。
+
+## 14. XA / 两阶段提交
+
+经典 2PC：
+
+```text
+阶段 1：Coordinator 要求所有 Participant prepare
+阶段 2：全部 Yes 则 commit；任一 No 则 rollback
+```
+
+Participant 在 prepare 成功后必须把可恢复状态持久化并保留相关资源。
+
+关键故障窗口：Coordinator 已决定 Commit，但某 Participant 没收到决定。该 Participant 进入 **in-doubt** 状态，不能因为本地超时就自行回滚，否则可能与已提交参与者产生永久分叉。
+
+正确恢复方式包括：
+
+- Coordinator 从持久化日志恢复并重发决定；
+- Participant 查询 Coordinator 或事务恢复服务；
+- 事务管理器做 crash recovery；
+- 最后才可能人工做启发式决策，并承认它可能破坏原子性。
+
+2PC 的主要成本：
+
+- prepare 后锁和资源占用时间较长；
+- 网络或协调故障时可能阻塞；
+- 所有参与者和驱动必须正确支持协议；
+- 运维恢复复杂，尾延迟高。
+
+协调者可通过持久化和高可用降低“单点”风险，但经典 2PC 的阻塞性质不会因此消失。XA 不是互联网绝对禁用，只是适用面通常比本地事务和最终一致方案窄。
+
+## 15. 分布式锁与 Fencing Token
+
+分布式锁只提供一段时间内的互斥意图，不提供跨服务事务原子性。
+
+Redis `SET key value NX PX ttl` 的风险：
+
+- 业务执行超过 TTL，第二个持有者获得锁；
+- 进程暂停后恢复，旧持有者仍可能继续写；
+- 异步复制故障转移可能丢失锁状态；
+- 自动续期只能降低过期概率，不能证明旧持有者已停止。
+
+更稳妥的方案是 fencing token：
+
+```text
+每次获得锁得到单调递增 token：41、42、43...
+下游只接受 token > last_token 的写
+旧持有者带 token=41 恢复时，被已经处理 token=42 的下游拒绝
+```
+
+需要线性一致锁和单调 token 时，可使用 etcd/ZooKeeper 一类共识系统；最终业务写仍应有数据库条件更新、版本号或唯一约束。
+
+锁的正确组合：
+
+```text
+锁降低并发
+  + fencing/版本拒绝旧持有者
+  + 本地事务维护业务不变量
+  + 幂等键处理重试
+```
+
+## 16. 缓存与数据库一致性
+
+Cache Aside 常用更新顺序：
+
+```text
+更新 DB 并提交 → 删除缓存
+```
+
+它比“先删缓存再更新 DB”安全，但仍有窗口。
+
+经典竞态：
+
+```text
+R：缓存 miss
+R：从 DB 读到旧值
+W：更新 DB 并提交
+W：删除缓存
+R：最后把旧值写回缓存
+```
+
+改进手段：
+
+- 缓存设置合理 TTL，保证最终自愈；
+- 缓存值携带版本，拒绝旧版本覆盖新版本；
+- 写后关键读走 Primary 或直接使用写响应；
+- DB 事务提交后通过可靠 Outbox 或 binlog CDC 删除缓存；
+- 对热点 key 使用互斥重建或逻辑过期，控制并发回填；
+- 支付、验价、禁用校验直接以权威 DB/服务为准。
+
+进程内的 after-commit 回调仍可能在 DB 已提交、删除 Redis 前崩溃；Redis 删除也可能失败。若该失效事件重要，必须可重试和可观测，不能只依赖内存回调。
+
+不要简单说“缓存是 AP、支付是 CP”。应明确：哪份数据是权威、读走哪个副本、允许陈旧多久、故障时返回什么。
+
+## 17. Case：订单与库存跨服务
+
+要求：不超卖、同一订单最多扣一次、库存失败不能支付、任一进程崩溃后最终可收敛。
+
+### 17.1 正确流程
 
 ```mermaid
-sequenceDiagram
-    participant O as Saga 协调器
-    participant F as 机票服务
-    participant H as 酒店服务
-    participant P as 支付
-    O->>F: 订票
-    F-->>O: OK
-    O->>H: 订房
-    H-->>O: 失败
-    O->>F: 补偿取消机票
+flowchart TD
+    A[Create Order] --> B[Tx: PENDING_STOCK + Order Outbox]
+    B --> C[OrderCreated]
+    C --> D[Inventory Tx]
+    D --> E[Inbox unique]
+    E --> F{available >= qty?}
+    F -->|yes| G[Deduct + StockReserved Outbox]
+    F -->|no| H[StockRejected Outbox]
+    G --> I[Order: PENDING_STOCK → CONFIRMED]
+    H --> J[Order: PENDING_STOCK → CANCELLED]
 ```
 
-**与 TCC**：Saga **无 Try 预留**，靠**补偿事务**；补偿可能**语义不严格**（「取消短信」无法撤回）。
+库存服务的 Inbox、条件扣减和结果 Outbox 在一个本地事务。订单服务消费结果时，也用自己的 Inbox 和条件状态更新。
 
----
-
-## 10. 本地消息表
-
-### 10.1 核心思想
-
-**业务写库与写消息表同一本地事务** → 定时任务扫表发 MQ → 消费者处理 → 更新消息状态。
-
-与 [Java/12 §29](../Java/12-高并发与分布式系统基础.md) 一致，本章补细节。
-
-```mermaid
-flowchart LR
-    subgraph local_tx [同一本地事务]
-        A[INSERT order]
-        B[INSERT outbox msg]
-    end
-    local_tx --> Job[定时扫描 PENDING]
-    Job --> MQ[RabbitMQ]
-    MQ --> Consumer[扣库存服务]
-    Consumer --> ACK[UPDATE msg SENT]
-```
-
-### 10.2 表结构
+关键条件更新：
 
 ```sql
-CREATE TABLE local_message (
-    id            BIGINT PRIMARY KEY,
-    biz_type      VARCHAR(32) NOT NULL,
-    biz_id        VARCHAR(64) NOT NULL,
-    payload       JSON NOT NULL,
-    status        TINYINT NOT NULL DEFAULT 0,  -- 0待发送 1已发送 2已消费
-    retry_count   INT NOT NULL DEFAULT 0,
-    next_retry_at DATETIME NOT NULL,
-    created_at    DATETIME NOT NULL,
-    UNIQUE KEY uk_biz (biz_type, biz_id)
-);
+UPDATE stock
+SET available = available - :qty
+WHERE sku_id = :sku_id AND available >= :qty;
+
+UPDATE orders
+SET status = 'CONFIRMED', version = version + 1
+WHERE order_id = :id AND status = 'PENDING_STOCK';
 ```
 
-### 10.3 Java 发件箱
+库存不足是业务结果，应发布 `StockRejected`，而不是无限技术重试。数据库超时、连接失败等瞬时错误才进入有界重试。
 
-```java
-@Service
-@RequiredArgsConstructor
-public class OrderAppService {
-    private final OrderMapper orderMapper;
-    private final LocalMessageMapper messageMapper;
+支付入口只接受 `CONFIRMED` 订单。长时间 `PENDING_STOCK` 由对账任务比较订单 Outbox、库存 Inbox 和当前状态，重新驱动或转人工失败。
 
-    @Transactional
-    public Long createOrder(CreateOrderCmd cmd) {
-        Order order = orderMapper.insert(cmd);
-        LocalMessage msg = LocalMessage.pending(
-            "STOCK_DEDUCT",
-            order.getId().toString(),
-            JsonUtil.toJson(new StockDeductEvent(order.getId(), cmd.getSkuId(), cmd.getQty()))
-        );
-        messageMapper.insert(msg);
-        return order.getId();
-    }
-}
+### 17.2 为什么不直接同步取消订单
 
-@Component
-@RequiredArgsConstructor
-public class OutboxPublisher {
-    @Scheduled(fixedDelay = 1000)
-    public void publish() {
-        List<LocalMessage> batch = messageMapper.selectPending(100);
-        for (LocalMessage m : batch) {
-            try {
-                rabbitTemplate.convertAndSend("stock.exchange", "deduct", m.getPayload());
-                messageMapper.markSent(m.getId());
-            } catch (Exception e) {
-                messageMapper.increaseRetry(m.getId());
-            }
-        }
-    }
-}
-```
+库存消费者调用 `orderService.Cancel()` 后再 ACK，会产生新的双写窗口：库存结果已经落库，但取消 RPC 超时。把结果写入库存 Outbox，交给订单服务幂等消费，故障边界更清楚。
 
-### 10.4 优缺点
+## 18. 观测、对账与验收
 
-| 优点 | 缺点 |
-|------|------|
-| 不依赖 MQ 事务特性 | 扫表延迟（通常 1s 级） |
-| 任何 MQ 都能用 | 需清理历史消息 |
-| 消息可审计 | 消费者仍要幂等 |
+### 18.1 状态指标
 
----
+- 业务状态数量与 oldest age；
+- Outbox backlog、Inbox 重复命中、DLQ；
+- Saga/TCC 停留时间与补偿失败；
+- 复制 lag、缓存版本拒绝；
+- 对账差异、修复成功率和人工工单年龄。
 
-## 11. MQ 事务消息（以 RocketMQ 为例）
+### 18.2 故障注入
 
-### 11.1 半消息流程
+- 响应丢失后用同一 operation 重试；
+- Outbox confirm 后、Consumer commit 后分别杀进程；
+- 让 TCC Cancel 先于 Try；
+- 让 2PC Participant prepare 后失联；
+- 让锁持有者暂停超过 TTL；
+- 模拟缓存删除失败。
 
-```mermaid
-sequenceDiagram
-    participant P as 生产者
-    participant MQ as Broker
-    participant DB as 本地DB
-    participant C as 消费者
-    P->>MQ: 发送半消息
-    MQ-->>P: OK
-    P->>DB: 执行本地事务
-    alt 本地事务成功
-        P->>MQ: commit 消息
-    else 失败
-        P->>MQ: rollback 消息
-    end
-    MQ->>C: 投递
-    MQ->>P: 回查本地事务状态（若超时）
-```
+每项都应验证幂等、in-doubt、fencing 或最终收敛是否符合设计。
 
-RabbitMQ **无原生事务消息**（只有事务模式性能差）；常用 **本地消息表** 或 **Confirm + 幂等** 模拟。
+### 18.3 验收标准
 
-### 11.2 与本地消息表对比
+- operation 和消息各重试 10 次仍只产生一次业务效果；
+- 每个中间态都有时限、告警和恢复动作；
+- 补偿失败可审计、可重试、可人工处理；
+- 能说明关键数据由谁拥有、何时收敛、如何证明。
 
-| 维度 | 本地消息表 | MQ 事务消息 |
-|------|------------|-------------|
-| 依赖 | 仅 DB + MQ | RocketMQ 等 |
-| 延迟 | 扫表间隔 | 较低 |
-| 实现 | 自建 outbox | Broker 回查 |
-| 面试 | 通用答案 | 阿里系加分 |
+## 19. 短链服务中的一致性
 
----
+短链可把一致性要求拆开：
 
-## 12. 方案选型决策树
+| 数据 | 要求 | 机制 |
+|---|---|---|
+| short code 唯一 | 强业务不变量 | DB 唯一索引 + 创建幂等键 |
+| code → target | 跳转权威状态 | DB 本地事务，缓存仅加速 |
+| 禁用/过期 | 尽快停止跳转 | 版本化缓存失效 + 权威回源 |
+| 点击统计 | 可最终一致 | MQ/日志流 + 幂等聚合 |
+| 搜索/报表 | 可延迟 | 异步读模型 |
 
-```text
-是否跨公司/银行级强一致？
-  └ 是 → TCC 或业务合并到单库
-  └ 否 → 能否接受秒级不一致？
-        └ 是 → 本地消息表 / MQ 事务消息（首选）
-        └ 否 → Saga 短补偿 + 同步 RPC（仍非 2PC）
-```
+创建短链时先提交映射，再返回成功；不能只把“创建命令”发 MQ 后立即声称链接可用。
 
-**Seata AT 模式**：自动代理数据源，**undo_log** 回滚——适合快速 POC；生产需评估 **全局锁、脏写** 与 RT。
+修改目标或禁用链接时：
 
----
+1. DB 条件更新状态和版本；
+2. 同事务写 `LinkChanged` Outbox；
+3. 缓存消费者按版本删除或覆盖；
+4. 跳转侧发现缓存版本可疑时回源权威库；
+5. 对账检查长期未失效缓存和异常跳转。
 
-## 13. 分布式锁回顾
+点击事件重复不会导致重复计费或重复 UV，需要事件 ID、聚合窗口或业务去重规则。
 
-[Java/07 Redis](../Java/07-Redis核心原理与缓存实战.md) 与 [Java/12](../Java/12-高并发与分布式系统基础.md) 已讲 SETNX；本章强调**与一致性的关系**。
+完整设计见 [08-短链服务设计](./08-短链服务设计.md)。
 
-### 13.1 Redis 分布式锁
+## 20. 复习清单
 
-```java
-// Redisson 推荐：看门狗续期 + Lua 释放
-RLock lock = redisson.getLock("lock:order:" + orderId);
-try {
-    if (lock.tryLock(3, 30, TimeUnit.SECONDS)) {
-        processOrder(orderId);
-    }
-} finally {
-    if (lock.isHeldByCurrentThread()) lock.unlock();
-}
-```
+- [ ] 能解释为什么超时是“未知结果”而不是“失败”。
+- [ ] 能先写出业务 invariant，再选择技术方案。
+- [ ] 能区分最终一致、读己之写、因果一致、线性一致和串行化。
+- [ ] 能准确说明 CAP 只讨论分区下 C/A 的取舍。
+- [ ] 不会简单给 Redis、MySQL 或整个业务贴 CP/AP 标签。
+- [ ] 知道 `R + W > N` 有交集，但不自动等于线性一致。
+- [ ] 能解释 ACID 与 BASE 可以同时存在。
+- [ ] 能说明为什么本地事务优先。
+- [ ] 能画出 Outbox/Inbox 的两个重复窗口和原子边界。
+- [ ] 能区分 Saga 的事件协同与集中编排。
+- [ ] 能正确解释 TCC 的空回滚、悬挂和 CANCEL 墓碑。
+- [ ] 知道 2PC prepare 后 in-doubt 不能超时自行回滚。
+- [ ] 能说明续租为什么不能替代 fencing token。
+- [ ] 能画出 DB 更新后删缓存仍可能出现的旧值回填窗口。
+- [ ] 能用订单库存 Case 讲清状态机、幂等、结果事件和对账。
+- [ ] 能区分短链跳转状态与点击统计的一致性要求。
 
-| 点 | 说明 |
-|----|------|
-| 作用 | **互斥**，不是分布式事务 |
-| 过期 | 业务未完成锁过期 → 双执行，需续期或 fencing token |
-| RedLock | 多 master 争议大，**慎用** |
-| vs DB | `SELECT FOR UPDATE` 单库有效；跨库无效 |
-
-### 13.2 锁 + 幂等 + 唯一索引（组合拳）
-
-```text
-SETNX 挡重复 → 唯一索引兜底 → 本地事务写库
-```
-
-锁**不能**替代跨服务事务；只保证同一 `orderId` 同时只有一个线程处理。
-
-### 13.3 etcd/ZK 锁（CP）
-
-强一致场景（选主、配置）用 **etcd lease**；库存扣减互联网仍多用 **Redis + DB 乐观锁**。
-
----
-
-## 14. Case Study 1：跨服务库存扣减
-
-### 14.1 场景
-
-下单服务（Order）与库存服务（Inventory）分库；流程：创建订单 → 扣库存 → 发通知。
-
-**要求**：不能超卖；可接受库存显示 1～2 秒延迟；支付前必须扣成功。
-
-### 14.2 错误方案
-
-| 方案 | 问题 |
-|------|------|
-| OpenFeign 同步扣库存，无事务 | 订单成功库存失败 → 脏单 |
-| XA 跨两库 | RT 高，锁表 |
-| 先扣库存再建单 |  abandoned 订单占库存 |
-
-### 14.3 推荐：本地消息表 + 消费者幂等
-
-```mermaid
-flowchart TD
-    U[用户下单] --> OS[订单服务]
-    OS --> LT[(本地事务: 订单+outbox)]
-    LT --> Pub[Outbox 发布]
-    Pub --> MQ[RabbitMQ]
-    MQ --> IS[库存服务]
-    IS --> DB2[(扣减 stock)]
-    IS --> CB[失败重试 / DLQ 人工]
-```
-
-**库存服务消费者**：
-
-```java
-@RabbitListener(queues = "stock.deduct.q")
-public void onDeduct(StockDeductEvent event) {
-    // 幂等：deduct_log 唯一 (order_id)
-    if (deductLog.exists(event.getOrderId())) return;
-    boolean ok = stockService.deduct(event.getSkuId(), event.getQty());
-    if (!ok) {
-        orderService.cancel(event.getOrderId()); // 补偿
-        throw new AmqpRejectAndDontRequeueException("stock not enough");
-    }
-    deductLog.save(event.getOrderId());
-}
-```
-
-**一致性语义**：**最终一致**；订单 `PENDING_STOCK` → `CONFIRMED`；用户看到「处理中」。
-
-### 14.5 Case Study 1 手把手步骤表
-
-| 步骤 | 你的设计动作 | 预期结果 | 若不对 |
-|------|--------------|----------|--------|
-| 1 | 订单服务 `createOrder` 本地事务写 `order` + `local_message` | 两表同事务提交 | 只写 order 无消息 → 库存永不扣 |
-| 2 | Outbox 定时任务扫 `PENDING` 发 MQ | 1s 内消息到达 Broker | 扫表停 → 积压，加监控 |
-| 3 | 库存消费者 `deduct_log` 幂等 `(order_id)` | 重复消息不双扣 | 无幂等 → 超扣 |
-| 4 | 扣失败发 `cancelOrder` 补偿 | 订单变 CANCELLED | 脏单滞留 |
-| 5 | 前端轮询或 WS 推送订单状态 | 用户见「处理中→成功」 | 用户以为失败重复下单 |
-
-### 14.6 更强：TCC 何时上？
-
-**秒杀尾款、冻结保证金**——Try 冻结库存，支付 Confirm，超时 Cancel。
-
----
-
-## 15. Case Study 2：缓存与 DB 一致性
-
-### 15.1 场景
-
-商品详情：MySQL 为源，Redis Cache Aside，读 QPS 10 万。
-
-更新商品：运营改价后，部分用户仍看到旧价 5～30 秒。
-
-### 15.2 策略矩阵
-
-| 策略 | 一致性 | 复杂度 | 适用 |
-|------|--------|--------|------|
-| 先更 DB 再删缓存 | 较好 | 低 | **默认推荐** |
-| 先删缓存再更 DB | 差（并发读回填旧值） | 低 | 不推荐 |
-| 延迟双删 | 中 | 中 | 旧项目 |
-| 订阅 Binlog 删缓存 | 好 | 高 | 大促、Canal |
-| 短 TTL | 最终 | 低 | 可接受 stale |
-
-### 15.3 先更 DB 再删缓存（标准）
-
-```java
-@Transactional
-public void updatePrice(Long productId, BigDecimal newPrice) {
-    productMapper.updatePrice(productId, newPrice);
-    // 事务提交后删缓存（TransactionSynchronization 或 @TransactionalEventListener AFTER_COMMIT）
-}
-
-@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-public void evictCache(ProductPriceUpdatedEvent e) {
-    redis.delete("product:" + e.getProductId());
-}
-```
-
-**仍有的窗口**：删缓存后、下次读前，另一请求读 miss 从 DB 读旧值？——若 DB 已提交则读到新值；**极端并发**下两个读 miss 并发写缓存旧值 → **互斥锁 / 逻辑过期**（见 03 章）。
-
-### 15.4 时序：问题并发
-
-```mermaid
-sequenceDiagram
-    participant A as 线程A 写
-    participant DB as MySQL
-    participant R as Redis
-    participant B as 线程B 读
-    A->>DB: UPDATE price=99
-    A->>R: DEL product:1
-    B->>R: GET miss
-    B->>DB: SELECT price=89 旧事务快照?
-    Note over B,DB: 若 B 在 A 提交前开始快照读可能旧
-    B->>R: SET product:1 price=89
-```
-
-**解法**：
-
-1. **读己之写**：写接口返回新 VO，前端直接用；详情页带 `version` 参数。
-2. **Canal**：Binlog 驱动删缓存，延迟 < 100ms。
-3. **accept stale**：价格非支付瞬间，TTL 30s + 下单时 **实时查 DB 验价**。
-
-### 15.5 CAP 视角
-
-- 缓存层：**AP**（Redis 主从可能丢最新）。
-- 支付验价路径：**CP 倾向**（直读 Master DB 或强校验接口）。
-
-### 15.6 Case Study 2 手把手步骤表
-
-| 步骤 | 你的设计动作 | 预期结果 | 若不对 |
-|------|--------------|----------|--------|
-| 1 | `updatePrice` 在 `@Transactional` 内更 DB | 行锁提交后新价持久化 | 事务外更价 → 回滚不一致 |
-| 2 | `AFTER_COMMIT` 监听器删 Redis `product:{id}` | 缓存失效 | 事务提交前删缓存 → 旧值回填 |
-| 3 | 读路径 Cache Aside：miss 读 Master | 读到新价 | 读从库 → 主从延迟旧价 |
-| 4 | 下单验价直查 DB 或强一致接口 | 支付金额正确 | 仅信缓存 → 资损 |
-| 5 | 大促加 Canal Binlog 删缓存 | 延迟 < 100ms | 仅 TTL → 窗口更长 |
-
-### 15.7 本地消息表 Java 逐行读（>10 行）
-
-| 行号/代码块 | 含义 | 改错会怎样 |
-|-------------|------|------------|
-| `@Transactional createOrder` | 订单与 outbox 同边界 | 去掉注解 → 可能只写一半 |
-| `orderMapper.insert(cmd)` | 持久化订单 | 顺序反了先写消息 → 消息指向空订单 |
-| `LocalMessage.pending(...)` | 构造待发送事件 | payload 缺 skuId → 消费者无法扣 |
-| `messageMapper.insert(msg)` | 同事务写 outbox | 漏写 → 永不发 MQ |
-| `@Scheduled publish` | 定时扫表 | fixedDelay 过大 → 秒级延迟 |
-| `selectPending(100)` | 批量拉取 | 单条拉 → 吞吐低 |
-| `convertAndSend` | 投递 MQ | 无 Confirm → 可能丢消息 |
-| `markSent` | 更新状态防重发 | 先发后标 → 重复投递 |
-| `increaseRetry` | 失败退避 | 无上限 → 死循环 |
-
----
-
-## 16. 幂等与去重（一致性的盟友）
-
-| 机制 | 层级 |
-|------|------|
-| 唯一索引 `(biz_type, biz_id)` | DB 最终兜底 |
-| Redis SETNX | 快速挡 |
-| 状态机 `PENDING→DONE` | 业务层 |
-| 消费者 dedup 表 | MQ 至少一次 |
-
-**至少一次投递 + 幂等消费 = 恰好一次效果**（工程语义）。
-
----
-
-## 17. 面试对比速答
-
-### Q：TCC 和 Saga？
-
-| | TCC | Saga |
-|---|-----|------|
-| 预留 | Try 阶段预留 | 无，直接做 |
-| 回滚 | Cancel 释放预留 | 补偿接口 |
-| 隔离 | 较好 | 差（脏读中间态） |
-| 适用 | 短、资源可冻结 | 长流程 |
-
-### Q：本地消息表 vs MQ 事务消息？
-
-都能最终一致；消息表 **MQ 无关**；RocketMQ 事务消息 **省扫表**，需 Broker 支持。
-
-### Q：分布式锁能保一致吗？
-
-**不能**；只保互斥。一致靠事务边界、幂等、补偿。
-
----
-
-## 18. 分级练习
-
-### 基础
-
-1. CAP 中 P 为什么必选？分区时 C 和 A 如何二选一？各举一系统。
-2. BASE 三个字母分别指什么？与 ACID 关系？
-3. 强一致 vs 最终一致各举一个业务场景。
-
-### 进阶
-
-4. 画出本地消息表从下单到扣库存的 Mermaid 时序图。
-5. 说明 TCC 的「空悬挂」是什么，如何预防。
-6. Cache Aside 更新价格，为什么推荐「先更 DB 再删缓存」？
-
-### 挑战
-
-7. 订单服务、积分服务、库存服务三写：用 Saga 设计正向与补偿步骤。
-8. 若 Redis 主从异步复制，锁在旧主上已释放，新主未同步——会发生什么？如何缓解？
-
-### 参考答案
-
-#### 基础 1～3
-
-1. 分布式必遇网络隔离；ZK 分区 minority **不可用=CP**；Cassandra **仍服务可能旧值=AP**。  
-2. 见 §4；BASE 是 ACID 在分布式的工程 relax。  
-3. 强一致：账户余额；最终：朋友圈点赞数、商品详情缓存。
-
-#### 进阶 4～6
-
-4. 见 §10.1 flowchart / §14.3。  
-5. Cancel 先于 Try 到达；Cancel 查无 Try 记录则**直接返回成功**不执行回滚。  
-6. 先删缓存则读请求可能把**旧 DB 值**写回缓存；先更 DB 则 miss 时读到新值（仍要注意事务提交时机用 AFTER_COMMIT 删缓存）。
-
-#### 挑战 7～8
-
-7. 正向：创建订单 → 扣库存 → 加积分；补偿：删积分 → 回库存 → 取消订单（逆序）；每步幂等 + 状态表。  
-8. **锁失效双扣**；缓解：Redisson 看门狗、fencing token（DB 更新带 monotonic token）、**DB 乐观锁/唯一约束兜底**。
-
----
-
-## 19. 学完标准
-
-- [ ] 30 秒内讲清 CAP，并说明 **P 必选、分区时在 C/A 间取舍**
-- [ ] 能解释 PACELC 与 CAP 的区别
-- [ ] 能描述 BASE，并举一个最终一致的业务闭环
-- [ ] 对比 **2PC / TCC / Saga / 本地消息表 / MQ 事务消息**（至少 4 项）
-- [ ] 能完整口述 **跨服务库存扣减** Case（outbox + 幂等 + 补偿）
-- [ ] 能分析 **缓存 DB 不一致** 的并发窗口与 3 种解法
-- [ ] 明确 **分布式锁 ≠ 分布式事务**，说出 Redisson 与唯一索引组合
-- [ ] 知道 Seata AT 定位，不盲目用于核心金融
-
----
-
-## 20. 常见问题 FAQ
-
-### Q1：互联网是不是都 AP？
-
-**多数 C 端 AP + 最终一致**；支付、库存确认等**关键路径**用同步校验、TCC 或单库集中。
-
-### Q2：最终一致会不会被用户投诉？
-
-看产品：**读己之写**、进度条、「处理中」状态；**支付结果**必须可靠（同步 + 对账）。
-
-### Q3：RabbitMQ 怎么做事务消息？
-
-无 RocketMQ 式半消息；用 **本地消息表** 或 **Publisher Confirm + 消费者幂等**。
-
-### Q4：Saga 补偿失败怎么办？
-
-重试 + DLQ + **人工对账**；Saga 必须设计**可重入补偿**。
-
-### Q5：和 05 章主从延迟关系？
-
-主从 lag 是 **最终一致**的一种；写后读主是 **读己之写** 策略，不是全局强一致。
-
-### Q6：Seata AT 和本地消息表怎么选？
-
-**AT**：开发快，自动代理数据源，需懂 undo_log 与全局锁；**消息表**：MQ 无关、可审计，多 1s 扫表延迟。金融核心写路径优先 **TCC 或单库**；互联网订单+库存优先 **outbox**。
-
-### Q7：Saga 补偿和 TCC Cancel 有何不同？
-
-TCC Cancel 释放 **Try 预留的资源**；Saga 补偿是 **业务逆向操作**（退款、删积分），语义可能不完美（短信无法撤回），且中间态可被其他事务读到。
-
-### Q8：etcd 和 Redis 在一致性上差在哪？
-
-**etcd/ZK**：quorum 读写，**CP**，分区 minority 不可用；**Redis 主从**：默认 **AP**，异步复制可能丢最新写。配置/选主用 etcd；缓存/库存扣减用 Redis + DB 兜底。
-
-### Q9：读己之写有哪些实现？
-
-写后读 **Master**、Session **粘滞**到同一副本、客户端 **携带 version** 强制读新、写接口 **直接返回新 VO** 不给读旧的机会。
-
-### Q10：2PC 协调者挂了怎么办？
-
-参与者处于 **prepare 后未知状态**——需 **超时回滚** 或 **人工介入**；这是 2PC 致命缺陷之一，也是互联网不用 XA 的原因。
-
-### Q11：如何向产品解释「最终一致」？
-
-用 **进度条**、**处理中** 状态、**读己之写**；支付结果必须 **同步可靠 + 对账**；展示类数据（点赞、库存展示）可延迟几秒。
-
-### Q12：DDIA 要读吗？
-
-**06、05 章理论来源**；《Designing Data-Intensive Applications》Ch.7 一致性、Ch.9 分区——有时间强烈推荐。
-
----
-
-## 21. 知识点对照 Java 章节
-
-| 主题 | 系统设计 06 | Java |
-|------|-------------|------|
-| CAP/BASE | 全文 | 12 §16 |
-| 分布式事务 | §6～12 | 12 §29, 11 Seata |
-| 分布式锁 | §13 | 07 §33, 12 §7 |
-| 缓存一致 | §15 | 07 §35, 03 章 |
-| 幂等 | §16 | 08 MQ, 14 场景 |
-
----
-
-## 22. 我的笔记区
-
-```text
-我们项目一致性模型：__________
-跨服务用的方案：__________
-缓存更新策略：__________
-有没有对账/补偿任务：__________
-```
-
----
-
-## 23. 闭卷自测
-
-完成后再看 §23.1 参考答案。
-
-1. **概念** CAP 三个字母分别指什么？为什么 P 实际上必选？
-2. **概念** BASE 三个字母分别指什么？与 ACID 核心区别？
-3. **概念** 强一致、最终一致、读己之写各举一个业务场景。
-4. **概念** PACELC 相对 CAP 多描述了哪种权衡？
-5. **概念** 本地消息表如何保证「订单与发消息」不丢一半？
-6. **概念** 分布式锁能否替代分布式事务？为什么？
-7. **动手** 画出 TCC Try/Confirm/Cancel 三阶段库存字段变化（available/frozen）。
-8. **动手** 写 Cache Aside 更新价格：事务提交后删缓存的 Spring 钩子名。
-9. **综合** 订单、积分、库存三服务三写：用 Saga 列正向与补偿步骤（逆序）。
-10. **综合** Redis 主从异步 + 分布式锁：锁过期双扣如何三层兜底？
-
-### 23.1 自测参考答案
-
-1. C 一致、A 可用、P 分区容忍；分布式必遇网络分区，故实际在 C/A 间取舍。  
-2. BA 基本可用、S 软状态、E 最终一致；ACID 立即一致，BASE 允许中间态。  
-3. 强一致：账户余额；最终一致：点赞数；读己之写：改昵称后立即读。  
-4. 无分区时在 **延迟 L** 与 **一致 C** 间取舍。  
-5. 同一 `@Transactional` 内 insert order + insert outbox；扫表发 MQ。  
-6. 不能；锁只互斥，不保证跨服务原子提交。  
-7. Try: available↓ frozen↑；Confirm: frozen↓；Cancel: available↑ frozen↓。  
-8. `@TransactionalEventListener(phase = AFTER_COMMIT)` 或 `TransactionSynchronization`。  
-9. 正向：建单→扣库存→加积分；补偿：删积分→回库存→取消订单。  
-10. Redisson 看门狗续期、fencing token、DB 乐观锁/唯一索引兜底。
-
----
-
-## 24. 费曼检验
-
-请在不看资料的情况下，用 **3 分钟**向朋友解释：**「为什么秒杀不能全靠 Redis，还要 MySQL 和 MQ？」**
-
-**对照提纲（能说到即过关）**：
-
-1. **CAP 视角**：Redis 偏 AP，主从可能丢；库存 **不能超卖** 要 DB 乐观锁兜底。  
-2. **性能视角**：5 万 QPS 不能直打 MySQL；Redis Lua 挡 99%，MQ 削峰异步落库。  
-3. **一致视角**：Redis 预扣与 DB 是 **最终一致**；靠幂等、唯一索引、对账 Job 收敛。
-
----
-
-## 25. DDIA 延伸阅读
-
-**06、05 章理论来源**；《Designing Data-Intensive Applications》Ch.7 一致性、Ch.9 分区——有时间强烈推荐。
-
----
-
-## 下一章预告
-
-06 章是**理论与方案选型**——下一章把 01～06 的方法论和组件**拧成一股绳**，做第一个完整 Case Study。
-
-**[07-秒杀系统简化设计](./07-秒杀系统简化设计.md)** 从需求澄清、容量估算到网关/Redis/MQ/DB 全链路，讲防超卖与幂等，并对比 [Java/14 秒杀模板](../Java/14-高频场景设计与面试专题.md) 与 [Java/07 Redis](../Java/07-Redis核心原理与缓存实战.md)、[Java/08 MQ](../Java/08-RabbitMQ与消息队列实战.md)、[Java/12](../Java/12-高并发与分布式系统基础.md) 的实战细节。
-
----
-
-*配合 [05 数据库扩展](./05-数据库扩展与读写分离.md)、[03 缓存架构](./03-缓存架构设计.md)、[04 MQ 架构](./04-消息队列架构设计.md) 形成数据层完整视图。*
-
-*本章已按 EXPANSION-STANDARD 扩充（§0+Case 步骤表+Outbox 逐行读+FAQ+闭卷自测+费曼）。*
-
-**EXPANSION-STANDARD 自检**：☑ §0 ☑ Case 步骤表 §14.5/§15.6 ☑ Outbox 逐行读 §15.7 ☑ FAQ≥12 ☑ 闭卷 10 题 §23 ☑ 费曼 §24
+下一章：[07-秒杀系统简化设计](./07-秒杀系统简化设计.md)。

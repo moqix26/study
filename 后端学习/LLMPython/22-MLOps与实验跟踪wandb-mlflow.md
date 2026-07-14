@@ -2,7 +2,7 @@
 
 > **文件编码**：UTF-8。  
 > **前置**：[05 nn.Module 训练循环](05-nn.Module与训练循环.md)、[15 LoRA/PEFT](15-微调SFT与LoRA-PEFT.md)、[17 分布式训练](17-分布式训练DDP-FSDP与DeepSpeed.md)。  
-> **对照**：[AIAgent 15 可观测性](../AIAgent/15-LLM可观测性与评估体系.md)；模型部署见 [LLMInfra 18 K8s GPU](../LLMInfra/18-容器化与Kubernetes-GPU推理部署.md)。
+> **对照**：[AIAgent 08 可观测性](../AIAgent/08-评估可观测安全与成本.md)；模型部署见 [LLMInfra 18 K8s GPU](../LLMInfra/18-容器化与Kubernetes-GPU推理部署.md)。
 
 ---
 
@@ -292,7 +292,7 @@ MLflow Production model / wandb artifact
 |------|------|--------|
 | 训练 | wandb/mlflow | loss、超参 |
 | 推理 | Prometheus + Grafana | QPS、P99 延迟 |
-| LLM 质量 | [AIAgent 15](../AIAgent/15-LLM可观测性与评估体系.md) | 幻觉率、用户反馈 |
+| LLM 质量 | [AIAgent 08](../AIAgent/08-评估可观测安全与成本.md) | 幻觉率、用户反馈 |
 
 ---
 

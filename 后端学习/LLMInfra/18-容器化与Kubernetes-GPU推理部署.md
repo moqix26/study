@@ -1,7 +1,7 @@
 # 容器化与 Kubernetes GPU 推理部署
 
 > **文件编码**：UTF-8。  
-> **前置**：[11 gRPC Serving](11-gRPC与高性能RPC服务.md)、[16 Batch 调度](16-推理Batch调度与ContinuousBatching.md)、[17 性能剖析](17-GPU性能剖析Nsight与perf.md)、[Linux 12 Docker](../Linux/12-Docker容器基础.md)。
+> **前置**：[11 gRPC Serving](11-gRPC与高性能RPC服务.md)、[16 Batch 调度](16-推理Batch调度与ContinuousBatching.md)、[17 性能剖析](17-GPU性能剖析Nsight与perf.md)、[Linux 12 Docker](../Linux/07-Docker与Compose.md)。
 
 ---
 
@@ -212,7 +212,7 @@ resources:
 ## 8. 常见困惑 FAQ
 
 **Q1：Docker 和 K8s 都要学吗？**  
-先 [Linux 12 Docker](../Linux/12-Docker容器基础.md)；K8s 是生产编排。
+先 [Linux 12 Docker](../Linux/07-Docker与Compose.md)；K8s 是生产编排。
 
 **Q2：GPU 共享一张卡多个 Pod？**  
 默认 **不支持** .fraction 需 MIG 或 time-slicing（延迟差）。
