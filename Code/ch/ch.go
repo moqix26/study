@@ -1,6 +1,7 @@
 package main
 
+import "fmt"
+
 func main() {
-	var 神他妈中文也可以 = 1
-	print(神他妈中文也可以)
+	fmt.Println(李俊芃)
 }
