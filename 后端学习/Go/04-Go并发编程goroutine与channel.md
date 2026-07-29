@@ -3,13 +3,11 @@
 > **文件编码**：UTF-8。  
 > **定位**：⭐ **面试最高频**——goroutine、channel、select、sync、context、worker pool、GMP、竞态检测。  
 > **前置**：[03 Go 函数接口与错误处理](./03-Go函数接口与错误处理.md)  
-> **下一章**：[05 Go 标准库与 HTTP 基础](./05-Go标准库与HTTP基础.md)
+> **下一章**：[05 Go 标准库与 HTTP 基础](./05-Go标准库与HTTP基础.md)——用 **net/http** 写原生 Web 服务，理解 Handler 链（06 Gin 的底层）
 
 ---
 
-## 0. 读前导读（零基础也能跟上）
-
-### 0.1 用一句话弄懂本章
+## 0. 导读
 
 **一句话**：Go 用 **goroutine** 轻量并发，用 **channel** 在 goroutine 间 **安全传数据**，用 **select/sync/context** 协调与取消——这是 Go 后端区别于 Java 线程池的核心武器。
 
@@ -26,67 +24,7 @@
 
 **为什么重要**：字节/腾讯 Go 岗 **几乎必问** GMP、channel 关闭、泄漏排查；shorturl 限流、异步日志、超时 HTTP 都依赖本章。
 
----
-
-### 0.2 你需要提前知道什么
-
-| 水平 | 建议 |
-|------|------|
-| 学完 03 章 | 正常跟做；先理解 **map 不能并发写** |
-| Java | 对比 Thread/Executor；Go **不要共享内存，要通信** |
-| ACM | 重点 **正确性**（-race）而非极致压常数 |
-
----
-
-### 0.3 本章知识地图（学完后应能勾选全部 ☐→☑）
-
-- [ ] 启动 goroutine，理解 **与 OS 线程区别**
-- [ ] 使用无缓冲/有缓冲 channel、**close 与 range**
-- [ ] 写 **select** 多路复用 + default 非阻塞
-- [ ] 使用 **Mutex、WaitGroup、Once**
-- [ ] 用 **context** 取消与超时
-- [ ] 实现 **worker pool** 与简易并发爬虫
-- [ ] 运行 **`go run -race`** 检测竞态
-- [ ] 白板简述 **GMP 模型**
-- [ ] 识别 **goroutine 泄漏** 场景
-- [ ] 闭卷自测 ≥ 8/10
-
----
-
-### 0.4 建议学习时长与节奏
-
-| 天 | 内容 | 产出 |
-|----|------|------|
-| D8 | §1～§3 goroutine/channel | 并发 Hello |
-| D9 | §4～§5 select/sync | worker pool v1 |
-| D10 | §6～§8 context/GMP/泄漏 | 带超时 HTTP + 爬虫 demo |
-
-**对应总计划**：W2 Day 8～10。
-
----
-
-### 0.5 学完本章你能做什么
-
-1. 实现 **N worker 消费 M 任务** 的 pool，主 goroutine 等待全部完成。
-2. 用 `context.WithTimeout` 限制 HTTP 请求 **3 秒** 超时。
-3. 面试 **5 分钟** 讲 GMP + channel 有缓冲/无缓冲区别。
-
----
-
-### 0.6 手把手：Worker Pool 20 分钟
-
-| 步骤 | 动作 | 预期 |
-|------|------|------|
-| 1 | 新建 `pool/main.go` | go mod init |
-| 2 | 粘贴 §9 完整代码 | 编译通过 |
-| 3 | `go run .` | 打印 10 个任务处理结果 |
-| 4 | `go run -race .` | 无 DATA RACE 报告 |
-
----
-
-## 本章与上一章的关系
-
-[03 章](./03-Go函数接口与错误处理.md) 的 error/defer 在并发中用于 **goroutine 内 panic 恢复** 与 **关闭资源**；02 章 map 并发写 panic 本章用 **channel 或 Mutex** 解决。
+**与前章的关系**：[03 章](./03-Go函数接口与错误处理.md) 的 error/defer 在并发中用于 **goroutine 内 panic 恢复** 与 **关闭资源**；02 章 map 并发写 panic 本章用 **channel 或 Mutex** 解决。
 
 ```mermaid
 flowchart TB
@@ -133,6 +71,8 @@ time.Sleep(time.Millisecond) // demo 仅；生产用 WaitGroup/channel
 
 ## 2. channel
 
+Go 并发哲学（源自 CSP 思想）：**「不要通过共享内存来通信，而要通过通信来共享内存」**——优先用 channel 传递数据的所有权，而不是让多个 goroutine 抢同一块内存再靠锁兜底。
+
 ### 2.1 创建
 
 ```go
@@ -157,6 +97,10 @@ v, ok := <-ch // ok false 表示 closed
 | **无缓冲** | send 阻塞直到有人 recv；**同步握手** |
 | **有缓冲** | buffer 未满 send 不阻塞；满则阻塞 |
 
+**无缓冲 channel 的典型场景（面试点）**：同步点、确保 **handoff**（值直接交接到接收方手里，不落中间缓冲）、信号通知（如 `done` channel）。
+
+**buffer size 怎么定**：本质是 **背压** 问题——buffer 越大，生产者越晚感知到「消费跟不上」。不确定时先用 0（同步）或小常数，压测后再调，不要凭感觉给大数。
+
 ### 2.4 关闭 channel ⭐
 
 ```go
@@ -176,6 +120,8 @@ for v := range ch {
 	fmt.Println(v)
 }
 ```
+
+**注意（多个发送方）**：有多个发送方时，任何一个发送方都不能安全地 close——其余发送方随后 send 会 panic。此时用一个单独的 done/stop channel 广播「停止发送」，或用 sync 原语（如 WaitGroup 等所有发送方退出后由协调者关闭）来协调。
 
 ### 2.5 单向 channel
 
@@ -262,9 +208,13 @@ case <-timer.C:
 
 一次性超时用 `time.After` 很方便；高频循环里应复用 `Timer` 或 `Ticker`，避免持续分配 timer、增加 GC 和调度压力。Go 1.23+ 改进了未引用 timer/ticker 的回收，但“可回收”不等于“零成本”。
 
+**select 与 epoll 的关系（面试点）**：select 是 **Go 语言级** 的 channel 多路复用；epoll 是 **OS 级** 的 IO 多路复用，二者层次不同。goroutine 的网络 IO 由 runtime 的 netpoller 托管，netpoller 在 Linux 上底层正是用 epoll（见 §8）。
+
 ---
 
 ## 4. sync 包
+
+**选型原则**：**传递数据所有权/分发任务** 用 channel；**保护共享状态** 用 Mutex；单变量的简单计数/标志位用 atomic（§4.5）。
 
 ### 4.1 Mutex / RWMutex
 
@@ -361,6 +311,10 @@ cond.Broadcast()
 
 很多队列场景用 channel 更自然；当条件不是“一次消息”，而是复杂共享状态时 `Cond` 才更合适。
 
+### 4.7 sync.Pool：临时对象复用
+
+`sync.Pool` 缓存可复用的临时对象（如 `bytes.Buffer`），减少高频分配带来的 GC 压力。注意：池中对象 **随时可能被 GC 回收**，所以只能放「丢了也无所谓」的临时对象，**不能当缓存用**——需要保证存活的数据要用真正的缓存结构。
+
 ---
 
 ## 5. context ⭐
@@ -409,7 +363,7 @@ func Handle(ctx context.Context, id int64) error {
 
 - 作为函数第一个参数传递，通常命名为 `ctx`；不要塞进 struct 作为长期字段。
 - 不传 `nil`；不知道用什么时用 `context.Background()`，测试可用 `context.TODO()` 暂占。
-- `WithValue` 只放跨 API 边界的 request-scoped 元数据，如 trace ID；业务参数仍应显式传参。
+- `WithValue` 只放跨 API 边界的 request-scoped 元数据，如 trace ID、user ID；不要传大对象，也不要把它当「可选参数」的口袋——业务参数仍应显式传参。
 - 派生了 cancel 函数就尽早 `defer cancel()`，用于释放 timer 和父子关联资源。
 - 下游必须真的接收并检查 ctx；只在 handler 创建 context、DAO 却不用它，取消链不会生效。
 
@@ -420,6 +374,8 @@ func Handle(ctx context.Context, id int64) error {
 ### 6.1 Worker Pool
 
 见 §9 完整代码。
+
+**与 Java 线程池对比**：Java 用 `Executor` 线程池是因为线程昂贵、必须复用；Go 的 goroutine 足够便宜，通常直接 `go` + channel，只有需要 **限制并发数**（保护下游、控内存）时才自己封装 worker pool（即 §9 的写法）。
 
 ### 6.2 Pipeline
 
@@ -436,6 +392,8 @@ func Handle(ctx context.Context, id int64) error {
 - 10 URL，**最大 3 并发**
 - `sem := make(chan struct{}, 3)` 信号量
 - 结果汇总 channel
+
+**在短链项目中的落点**：异步写 click_log（请求路径只把打点塞进 channel，后台 goroutine 批量落库）、批量预热缓存（worker pool 并发加载）、对 upstream 的超时检查（`context.WithTimeout`）。
 
 ---
 
@@ -517,6 +475,8 @@ Go 支持异步抢占，长时间运行的 goroutine 通常也能被调度器打
 
 `GOMAXPROCS` 控制同时执行 Go 代码所需的 P 数量，不限制 goroutine 总数。CPU 密集任务增加 goroutine 超过 P 数量不会凭空增加算力；IO 密集任务可以有更多 goroutine，因为大量任务处在等待状态。
 
+goroutine 也 **不是越多越好**：数量失控时调度、栈内存与 GC 压力都会上升，需要限并发时用 worker pool（§9）或信号量（§6.4）。`GOMAXPROCS` 本身无论 CPU 密集还是 IO 密集一般都保持默认（CPU 核数）即可，特殊场景（如容器配额受限）再调。
+
 ---
 
 ## 9. Worker Pool 完整代码
@@ -569,6 +529,15 @@ func main() {
 
 **预期**：10 行 `worker X done job Y`，无死锁。
 
+### 9.1 手把手：20 分钟跑起来
+
+| 步骤 | 动作 | 预期 |
+|------|------|------|
+| 1 | 新建 `pool/main.go` | `go mod init` 成功 |
+| 2 | 粘贴上方完整代码 | 编译通过 |
+| 3 | `go run .` | 打印 10 个任务处理结果 |
+| 4 | `go run -race .` | 无 DATA RACE 报告 |
+
 ---
 
 ## 10. goroutine 泄漏场景
@@ -602,127 +571,13 @@ func main() {
 
 ---
 
-## 12. FAQ（≥10）
-
-### Q1：channel 和 Mutex 怎么选？
-
-**传递所有权/任务** 用 channel；**保护共享状态** 用 Mutex；简单计数可用 atomic。
-
-### Q2：buffer size 设多少？
-
-看 **背压**；不知道先 0（同步）或小常数，压测再调。
-
-### Q3：谁 close channel？
-
-**发送方**；多个发送方用 **单独 done channel** 或 sync 协调。
-
-### Q4：goroutine 越多越好吗？
-
-否；过多增加调度开销；用 **pool 限并发**。
-
-### Q5：GOMAXPROCS 要改吗？
-
-CPU 密集可默认；IO 密集一般也默认；特殊场景再调。
-
-### Q6：context.WithValue 存什么？
-
-request id、user id；**不要**传大对象或可选参数滥用。
-
-### Q7：select 和 epoll 关系？
-
-select 是 **Go 语言级** channel 多路复用；epoll 是 **OS IO 多路复用**；netpoller 底层用 epoll。
-
-### Q8：sync.Pool 用途？
-
-临时对象复用，减 GC；**对象可能被回收**，不能当缓存。
-
-### Q9：原子操作 atomic？
-
-简单计数、flag；复杂结构仍用 Mutex。
-
-### Q10：面试：无缓冲 channel 应用场景？
-
-**同步点**、确保 **handoff**、信号通知（如 done）。
-
-### Q11：Java 线程池 vs Go？
-
-Go 倾向 **goroutine + channel**；项目里可自封装 pool（本章 §9）。
-
-### Q12：短链项目哪里用并发？
-
-异步写 click_log、批量预热缓存、超时 upstream 检查（可选）。
-
----
-
-## 13. 闭卷自测（≥10）
-
-1. goroutine 和线程创建成本差异？
-2. 无缓冲 channel send 何时阻塞？
-3. close 后 recv 行为？
-4. select 多个 case 同时就绪？
-5. WaitGroup 使用三步骤？
-6. context.WithTimeout 典型场景？
-7. GMP 中 P 是什么？
-8. 如何检测竞态？
-9. goroutine 泄漏一种场景？
-10. 「不要通过共享内存通信」下半句？
-
-<details>
-<summary>自测参考答案</summary>
-
-1. goroutine 栈小、用户态调度；线程内核调度、栈 MB 级。
-2. 直到另一 goroutine recv（握手同步）。
-3. 立即返回零值，ok=false；range 结束。
-4. 伪随机选一个执行。
-5. Add(n)；goroutine 里 defer Done；Wait 阻塞至计数 0。
-6. HTTP/DB 调用超时、取消长任务。
-7. Processor，本地运行队列，GOMAXPROCS 控制数量。
-8. `go run/test -race`。
-9. 如 send 无接收者永久阻塞。
-10. 「而通过通信共享内存」（C.A.R. Hoare / Go 哲学）。
-
-</details>
-
----
-
-## 14. 费曼检验
-
-**3 分钟讲 goroutine 和 channel。**
-
-**提纲**：
-
-1. goroutine = **便宜的小工**，Go 自动调度到 CPU。
-2. channel = **传送带**，避免多人改同一数据打架。
-3. 结束用 **WaitGroup** 或 **close channel**；超时用 **context**。
-
----
-
-## 15. 练习建议
+## 12. 练习建议
 
 1. **并发爬虫**：3 并发抓 10 URL（可用 `http.Get`）。
 2. **带超时 HTTP**：`context.WithTimeout` + `http.NewRequestWithContext`。
 3. 故意制造 DATA RACE，用 `-race` 修。
-4. 画 GMP 图 **3 遍**，对照 [15 面试章](./15-Go面试专题与知识点总表.md)。
+4. 画出 GMP 图并口述调度流程，对照 [15 面试章](./15-Go面试专题与知识点总表.md)。
 
 ---
 
-## 16. 学完标准
-
-- [ ] 独立写 worker pool + `-race` 通过
-- [ ] 口述 GMP、channel 关闭、有缓冲区别
-- [ ] 完成爬虫或超时 HTTP demo
-- [ ] 闭卷自测 ≥ 8/10
-
----
-
-## 17. 章节衔接
-
-| 上一章 | 本章 | 下一章 |
-|--------|------|--------|
-| [03 函数接口](./03-Go函数接口与错误处理.md) | 并发 ⭐ | [05 HTTP 标准库](./05-Go标准库与HTTP基础.md) |
-
-**下一章**：用 **net/http** 写原生 Web 服务，理解 Handler 链——06 Gin 的底层。
-
----
-
-*文档版本：v1.0 · 2026-07-08 · 路径：`F:\study\后端学习\Go\04-Go并发编程goroutine与channel.md`*
+*文档版本：v1.1 · 2026-07-26（去水化：删除知识地图/学习节奏/闭卷自测/费曼检验/学完标准等板块，FAQ 中 12 条技术要点改写并入正文对应小节）· 路径：`F:\study\后端学习\Go\04-Go并发编程goroutine与channel.md`*

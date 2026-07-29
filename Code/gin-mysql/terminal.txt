@@ -1,0 +1,54 @@
+PS C:\Users\honor> Invoke-RestMethod http://localhost:8080/api/users
+
+id name
+-- ----
+ 2 aa
+ 3 cc
+ 4 aaa
+ 5 bbb
+ 6 ccc
+
+
+PS C:\Users\honor> Invoke-RestMethod -Uri http://localhost:8080/api/users/batch -Method POST -ContentType "application/json" -Body '{"names":["ddd","eee"]}'
+
+id name
+-- ----
+ 7 ddd
+ 8 eee
+
+
+PS C:\Users\honor> Invoke-RestMethod http://localhost:8080/api/users
+
+id name
+-- ----
+ 2 aa
+ 3 cc
+ 4 aaa
+ 5 bbb
+ 6 ccc
+ 7 ddd
+ 8 eee
+
+
+PS C:\Users\honor> Invoke-RestMethod -Uri http://localhost:8080/api/users/batch -Method POST -ContentType "application/json" -Body '{"names":["g",""]}'
+Invoke-RestMethod : {"error":"empty name"}
+所在位置 行:1 字符: 1
++ Invoke-RestMethod -Uri http://localhost:8080/api/users/batch -Method  ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (System.Net.HttpWebRequest:HttpWebRequest) [Invoke-RestMethod]，WebExce
+    ption
+    + FullyQualifiedErrorId : WebCmdletWebResponseException,Microsoft.PowerShell.Commands.InvokeRestMethodCommand
+PS C:\Users\honor> Invoke-RestMethod http://localhost:8080/api/users
+
+id name
+-- ----
+ 2 aa
+ 3 cc
+ 4 aaa
+ 5 bbb
+ 6 ccc
+ 7 ddd
+ 8 eee
+
+
+PS C:\Users\honor>

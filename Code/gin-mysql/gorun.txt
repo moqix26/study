@@ -1,0 +1,28 @@
+PS F:\study> cd F:\study\Code
+>> go run ./gin-mysql
+database ok
+[GIN-debug] [WARNING] Running in "debug" mode. Switch to "release" mode in production.
+ - using env:   export GIN_MODE=release
+ - using code:  gin.SetMode(gin.ReleaseMode)
+[GIN-debug] GET    /api/users                --> main.listUsers (3 handlers)
+[GIN-debug] POST   /api/users                --> main.createUser (3 handlers)
+[GIN-debug] POST   /api/users/batch          --> main.createUsersBatch (3 handlers)
+[GIN-debug] GET    /api/users/:id            --> main.getUser (3 handlers)
+[GIN-debug] PUT    /api/users/:id            --> main.updateUser (3 handlers)
+[GIN-debug] DELETE /api/users/:id            --> main.deleteUser (3 handlers)
+:8080 is on
+[GIN-debug] [WARNING] You trusted all proxies, this is NOT safe. We recommend you to set a value.
+Please check https://github.com/gin-gonic/gin/blob/master/docs/doc.md#dont-trust-all-proxies for details.      
+[GIN-debug] Listening and serving HTTP on :8080
+[IN ] GET /api/users
+[OUT] GET /api/users -> 200
+[IN ] POST /api/users/batch
+[OUT] POST /api/users/batch -> 201
+[IN ] GET /api/users
+[OUT] GET /api/users -> 200
+[IN ] POST /api/users/batch
+[OUT] POST /api/users/batch -> 400
+[IN ] GET /api/users
+[OUT] GET /api/users -> 200
+exit status 0xc000013a
+PS F:\study\Code>

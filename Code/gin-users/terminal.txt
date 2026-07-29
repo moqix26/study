@@ -1,0 +1,52 @@
+PS C:\Users\honor> Invoke-RestMethod http://localhost:8080/health
+
+status
+------
+ok
+
+
+PS C:\Users\honor> Invoke-RestMethod -Uri http://localhost:8080/api/users -Method POST -ContentType "application/json" -Body '{"name":"first"}'
+
+id name
+-- ----
+ 1 first
+
+
+PS C:\Users\honor> Invoke-RestMethod -Uri http://localhost:8080/api/users -Method POST -ContentType "application/json" -Body '{"name":"second"}'
+
+id name
+-- ----
+ 2 second
+
+
+PS C:\Users\honor> Invoke-RestMethod -Uri http://localhost:8080/api/users -Method POST -ContentType "application/json" -Body '{"name":"third"}'
+
+id name
+-- ----
+ 3 third
+
+
+PS C:\Users\honor> Invoke-RestMethod -Uri http://localhost:8080/api/users/1 -Method PUT -ContentType "application/json" -Body '{"name":"F"}'
+
+id name
+-- ----
+ 1 F
+
+
+PS C:\Users\honor> Invoke-RestMethod http://localhost:8080/api/users/1
+
+id name
+-- ----
+ 1 F
+
+
+PS C:\Users\honor> Invoke-RestMethod -Uri http://localhost:8080/api/users/2 -Method DELETE
+
+PS C:\Users\honor> Invoke-RestMethod http://localhost:8080/api/users/2
+Invoke-RestMethod : {"error":"not found"}
+所在位置 行:1 字符: 1
++ Invoke-RestMethod http://localhost:8080/api/users/2
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (System.Net.HttpWebRequest:HttpWebRequest) [Invoke-RestMethod]，Web
+    Exception
+    + FullyQualifiedErrorId : WebCmdletWebResponseException,Microsoft.PowerShell.Commands.InvokeRestMethodCommand
