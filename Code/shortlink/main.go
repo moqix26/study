@@ -182,7 +182,9 @@ func loadLongURL(code string) (string, bool, error) {
 		return "", false, err
 	}
 
-	_ = rdb.Set(ctx, key, link.LongURL, cacheTTL).Err()
+	if err := rdb.Set(ctx, key, link.LongURL, cacheTTL).Err(); err != nil {
+		fmt.Println("redis set error:", err)
+	}
 	return link.LongURL, false, nil
 }
 
