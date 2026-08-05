@@ -199,11 +199,11 @@ func getLinkJSON(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	cache := "MISS"
 	if hit {
-		cache = "HIT"
+		c.Header("X-Cache", "HIT")
+	} else {
+		c.Header("X-Cache", "MISS")
 	}
-	c.Header("X-Cache", cache)
 	c.JSON(http.StatusOK, gin.H{
 		"code":      code,
 		"long_url":  longURL,
@@ -226,10 +226,10 @@ func redirectLink(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	cache := "MISS"
 	if hit {
-		cache = "HIT"
+		c.Header("X-Cache", "HIT")
+	} else {
+		c.Header("X-Cache", "MISS")
 	}
-	c.Header("X-Cache", cache)
 	c.Redirect(http.StatusFound, longURL)
 }
