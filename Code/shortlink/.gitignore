@@ -1,0 +1,23 @@
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+/server
+/shortlink.exe
+
+# Test / coverage
+*.test
+*.out
+coverage.*
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local env (never commit real secrets)
+.env
+.env.local
+*.local.env

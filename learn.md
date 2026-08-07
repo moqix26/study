@@ -1,6 +1,6 @@
 # 学习状态板 · 实时更新
 
-> **最后更新**：2026-07-16 21:44  
+> **最后更新**：2026-08-07 20:40  
 > **用法**：和 AI 聊天时以本文件为准；每聊完一段，AI 会更新「当前学什么」「进度」「今日记录」。  
 > **AI 交接**：见 `F:\study\.memory\`（readme.md 为协议，摘要按时间倒序读）  
 > **主路线文档**：[`go-backend-learning-plan.md`](go-backend-learning-plan.md) · [`后端学习/Go/00-学习路线图与说明.md`](后端学习/Go/00-学习路线图与说明.md)
@@ -21,7 +21,7 @@
 
 ---
 
-## 2. 当前进度快照（2026-07-13）
+## 2. 当前进度快照（2026-08-07）
 
 ### 2.1 各模块完成度（自评 / 10）
 
@@ -32,12 +32,12 @@
 | **Go Web（net/http）** | **6.5** | health + POST + GET 完成；第 4 步内存 map |
 | **Go 05 进度** | **已完成** | ①～④ 含 map+锁 ✅ |
 | 计网 | 1.5 | 01～03 md 看过但**看不懂**；计划 B 站短课 + curl |
-| MySQL / Redis | 0 | 未开始（正常，Go 07～08 再开） |
-| 项目（短链） | 1 | 仅 hello / health / 静态站级别 |
+| MySQL / Redis | 6 | Go 07 GORM + Go 08 Cache Aside 已过关（本地 Docker） |
+| 项目（短链） | 5 | V1 规范工程已落地；按 `study.md` 验收/跟学中 |
 | 算法 | 7 | **Go 刷题**，函数名有时不熟；C++ 竞赛底仍在 |
 | Git / 环境 | 6 | Go 1.26 + VS Code + go mod OK；Git 基础够用 |
 
-**综合**：约 **4.5 / 10** — 语法阶段可收工，**卡在 Web + 计网**，需换学法（多动手 + 视频，少通读 md）。
+**综合**：约 **6 / 10** — Web 栈（Gin/MySQL/Redis）已通；主线转入短链项目跟学与口述验收。
 
 ---
 
@@ -52,7 +52,7 @@
 | Go 06 Gin | ☑ | CRUD + 自写 Logger 中间件过关（`Code/gin`） |
 | Go 07 MySQL | ☑ | CRUD + 列表 Find + 事务 batch 回滚验收通过 |
 | Go 08 Redis | ☑ | Cache Aside：MISS→HIT；PUT 后 DEL 再 MISS（`Code/gin-redis`） |
-| Go 07～11 短链 | ☐ | 12 月前目标：能 demo + 能讲 |
+| Go 07～11 短链 | ▶ | **当前主线**：短链 V1 规范工程（`Code/shortlink`） |
 | 计网 01～03 | △ 看过 md | 未建立直觉，**暂停通读** |
 | 计网 04 HTTP | ☐ 优先 | 配合 Go 05 + 短视频 |
 | 计网 02 TCP | ☐ 优先 | curl 连不上时分层排查 |
@@ -84,20 +84,24 @@
 
 ## 3. 现在学什么（AI 指定 · 只看这一块）
 
-> **更新于 2026-07-16 21:44**  
-> **Go 08 第 1 步验收通过** ✅（MISS / HIT / PUT 删缓存）
+> **更新于 2026-08-07 20:40**  
+> **短链 V1 规范项目已落地** ✅ → 跟 `Code/shortlink/study.md` 学
 
-### 当前：**Go 05～08 基础链路已通**
+### 当前：**短链 V1 · 按 study.md 自学/验收**
 
-```text
-net/http → Gin → MySQL/GORM → Redis Cache Aside
+**路径**：`F:\study\Code\shortlink`
+
+```powershell
+cd F:\study\Code\shortlink
+docker start study-mysql study-redis
+go run .
 ```
 
-**下一关建议（二选一）**：
-1. **短链项目启动**（8 月主线可提前骨架）：创建短码 + 302 跳转 + MySQL + Redis  
-2. 或先补一点：缓存穿透/空值缓存概念（口述即可，不必再写大项目）
+- 学习路线：[`study.md`](Code/shortlink/study.md)  
+- 模块详解：[`markdown/`](Code/shortlink/markdown/)  
+- AI 记忆：[`memory/`](Code/shortlink/memory/)  
 
-回「开短链」或「先讲穿透」继续。
+会员到期后：只打开 `study.md` 从 P0 关卡勾选即可。
 
 ### Go 05 已完成备忘
 
@@ -140,6 +144,24 @@ Invoke-RestMethod http://localhost:8080/api/users/1
 ---
 
 ## 6. 学习日志
+
+### 2026-08-07（20:40）
+
+- **学了啥**：短链 V1 规范工程落地（分层 + Redis + 计数 + study.md/markdown/memory）
+- **现在干啥**：按 `Code/shortlink/study.md` 验收；会员到期后靠该目录自学
+- **备注**：在 shortlink 目录下 `go run .`（独立 go.mod）
+
+### 2026-08-07（16:51）
+
+- **学了啥**：短链 V1 完整参考（后已升级为分层工程）
+- **现在干啥**：（已完成）见上条
+- **备注**：以 `study.md` + `internal/` 为准，勿再当单文件作业
+
+### 2026-08-07（16:11）
+
+- **学了啥**：确认 gin-redis main.go 逻辑已基本明白
+- **现在干啥**：进入 **短链 V1**（创建 + 302）；8 月主线正式开项目
+- **备注**：基础栈够用，不必再扩 users CRUD
 
 ### 2026-07-16（21:44）
 

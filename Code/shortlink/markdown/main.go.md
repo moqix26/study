@@ -1,7 +1,12 @@
-# shortlink/main.go 逐块精讲
+# （历史）单文件 main.go 逐块精讲
 
-> 对应文件：`F:\study\Code\shortlink\main.go`  
-> 目标：把「每一块在干什么、每个变量是什么」讲清楚，方便对照源码阅读。
+> **注意**：当前规范代码已分层到 `internal/` + `cmd/server`。  
+> 本文保留帮助你对照「从单文件到分层」。正式学习请跟 [`../study.md`](../study.md) 与 [00-index.md](./00-index.md)。  
+> 旧单文件逻辑与现网功能基本等价（现网额外有 click_count、配置化）。
+
+> 对应历史：曾存在根目录超大 `main.go`  
+> 目标：把「每一块在干什么」讲清楚。
+
 
 ---
 
@@ -538,7 +543,6 @@ GET /:code
 | 步骤                                      | 含义                                                             |
 | --------------------------------------- | -------------------------------------------------------------- |
 | `code := c.Param("code")`               | 取出短码                                                           |
-| 若 `code=="health"                       |                                                                |
 | `loadLongURL`                           | 同缓存逻辑                                                          |
 | `c.Header("X-cache", ...)`              | 标记 HIT/MISS（注意：这里头名字是 `X-cache`，JSON 口是 `X-Cache`，大小写不敏感但建议统一） |
 | `c.Redirect(http.StatusFound, longURL)` | **302**，并设置 `Location: longURL`                                |
