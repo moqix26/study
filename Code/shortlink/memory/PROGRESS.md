@@ -1,27 +1,32 @@
 # PROGRESS
 
-- 更新：2026-08-07（收口）
+- 更新：2026-08-08（文档重组收口）
 - 根目录：`F:\study\Code\shortlink`
 
 ## 批次
 
-- [x] Batch1：memory + 分层目录 + 自有 go.mod
-- [x] Batch2-3：创建短链 + 302 + Redis Cache Aside + JSON 查询
-- [x] Batch4：访问计数 + 配置示例 + README + .gitignore
-- [x] Batch5：markdown/ 全套索引与 00～09
-- [x] Batch6：study.md 学习路线 + 深度加餐
-- [x] Batch7：`go build` 通过；决策写入 DECISIONS
+- [x] Batch1～7：规范工程 + 初版文档（已完成）
+- [x] DocRewrite：study.md 聊天式 S0～S5 + markdown 01～12 逐块精讲（main.go.md 密度）
+
+## 用户怎么学（已确认）
+
+**主教材**：`study.md`（聊天推进：【我说】→【你做什么】→【过关】）  
+**精读加餐**：`markdown/01～12` + `H-main-singlefile.md`（study 点名再开）  
+**索引**：`markdown/00-index.md`
+
+当前关卡：
+- [ ] **S0**：Docker + `go run .` + `/health`
+- [ ] S1：三条 API 与请求路径
+- [ ] S2：创建短链链路
+- [ ] S3：302 + Cache Aside + X-Cache
+- [ ] S4：分层与配置
+- [ ] S5：验收 + 口述
 
 ## 运行方式
 
 ```powershell
 cd F:\study\Code\shortlink
 go run .
-# 或 go run ./cmd/server
 ```
 
-## 用户到期后怎么学
-
-1. 打开 `study.md` 从关卡 P0  
-2. 细节看 `markdown/00-index.md`  
-3. AI 续写先读本目录
+AI 续写先读本目录 + `F:\study\learn.md`。

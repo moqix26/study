@@ -1,9 +1,10 @@
 # 学习状态板 · 实时更新
 
-> **最后更新**：2026-08-07 20:40  
+> **最后更新**：2026-08-08 18:20  
 > **用法**：和 AI 聊天时以本文件为准；每聊完一段，AI 会更新「当前学什么」「进度」「今日记录」。  
 > **AI 交接**：见 `F:\study\.memory\`（readme.md 为协议，摘要按时间倒序读）  
-> **主路线文档**：[`go-backend-learning-plan.md`](go-backend-learning-plan.md) · [`后端学习/Go/00-学习路线图与说明.md`](后端学习/Go/00-学习路线图与说明.md)
+> **主路线文档**：[`go-backend-learning-plan.md`](go-backend-learning-plan.md) · [`后端学习/Go/00-学习路线图与说明.md`](后端学习/Go/00-学习路线图与说明.md)  
+> **学法**：短链主跟 [`Code/shortlink/study.md`](Code/shortlink/study.md)（聊天式 S0～S5）；`markdown/` 是逐块精读加餐，不强制通读
 
 ---
 
@@ -84,24 +85,21 @@
 
 ## 3. 现在学什么（AI 指定 · 只看这一块）
 
-> **更新于 2026-08-07 20:40**  
-> **短链 V1 规范项目已落地** ✅ → 跟 `Code/shortlink/study.md` 学
+> **更新于 2026-08-08 18:20**  
+> **学法**：主跟 study.md（S0～S5）；markdown 精读加餐
 
-### 当前：**短链 V1 · 按 study.md 自学/验收**
+### 当前：**短链 V1 · 打开 study.md 从 S0 开始**
 
-**路径**：`F:\study\Code\shortlink`
+**路径**：`F:\study\Code\shortlink`  
+**主教材**：[`study.md`](Code/shortlink/study.md)（聊天式一步一步；七段节奏）  
+**精读加餐**：[`markdown/00-index.md`](Code/shortlink/markdown/00-index.md)（每篇逐块精讲）  
+**你怎么学**：跟 study 一个【过关】再下一个；卡住贴报错问 AI；不要通读 markdown
 
 ```powershell
 cd F:\study\Code\shortlink
 docker start study-mysql study-redis
 go run .
 ```
-
-- 学习路线：[`study.md`](Code/shortlink/study.md)  
-- 模块详解：[`markdown/`](Code/shortlink/markdown/)  
-- AI 记忆：[`memory/`](Code/shortlink/memory/)  
-
-会员到期后：只打开 `study.md` 从 P0 关卡勾选即可。
 
 ### Go 05 已完成备忘
 
@@ -145,10 +143,22 @@ Invoke-RestMethod http://localhost:8080/api/users/1
 
 ## 6. 学习日志
 
+### 2026-08-08（18:20）
+
+- **学了啥**：study.md + markdown/ 按「聊天主线 + 逐块精讲」重组完成
+- **现在干啥**：打开 `Code/shortlink/study.md` 从 **S0** 跟
+- **备注**：markdown 每篇对齐旧 main.go.md 密度；链接已校验 LINKS_OK
+
+### 2026-08-08（18:05）
+
+- **学了啥**：确认偏好 = 聊天推进，不靠通读短摘要 md
+- **现在干啥**：（已落地主教材）见上条
+- **备注**：md 只当地图 → 已升级为 study 主教材
+
 ### 2026-08-07（20:40）
 
 - **学了啥**：短链 V1 规范工程落地（分层 + Redis + 计数 + study.md/markdown/memory）
-- **现在干啥**：按 `Code/shortlink/study.md` 验收；会员到期后靠该目录自学
+- **现在干啥**：（已改学法）见上条
 - **备注**：在 shortlink 目录下 `go run .`（独立 go.mod）
 
 ### 2026-08-07（16:51）

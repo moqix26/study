@@ -62,8 +62,9 @@ curl.exe -i http://localhost:8080/api/links/<code>
 
 ## 学习入口
 
-1. 打开 [`study.md`](./study.md) 按关卡跟  
-2. 细节查 [`markdown/`](./markdown/)  
+1. **主教材**：打开 [`study.md`](./study.md)，按 S0→S5 聊天式推进  
+2. **精读加餐**：[`markdown/00-index.md`](./markdown/00-index.md)（每篇都是逐块代码精讲，对齐旧 `main.go.md` 密度）  
+3. 不要通读 markdown 当第二套主线；study 点名再打开
 
 ## 说明
 
