@@ -19,9 +19,7 @@ shortlink/
 │   └── pkg/             # shortcode / urlx
 ├── configs/             # 配置示例
 ├── markdown/            # 逐模块详解
-├── memory/              # AI 接力记忆
 ├── study.md             # 完整学习路线（跟这个学）
-├── main.go              # 兼容 go run .
 └── README.md
 ```
 
@@ -40,8 +38,6 @@ docker start study-redis
 ```powershell
 cd F:\study\Code\shortlink
 go mod tidy
-go run .
-# 或
 go run ./cmd/server
 ```
 
@@ -63,7 +59,7 @@ curl.exe -i http://localhost:8080/api/links/<code>
 ## 学习入口
 
 1. **主教材**：打开 [`study.md`](./study.md)，按 S0→S5 聊天式推进  
-2. **精读加餐**：[`markdown/00-index.md`](./markdown/00-index.md)（每篇都是逐块代码精讲，对齐旧 `main.go.md` 密度）  
+2. **精读加餐**：[`markdown/00-index.md`](./markdown/00-index.md)（每篇都是逐块代码精讲）
 3. 不要通读 markdown 当第二套主线；study 点名再打开
 
 ## 说明

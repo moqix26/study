@@ -348,7 +348,7 @@ fmt.Println("[OUT]", method, path, "->", Status, "X-Cache=", Header.Get("X-Cache
 cd F:\study\Code\shortlink
 docker start study-mysql
 docker start study-redis
-go run .
+go run ./cmd/server
 # 另开终端继续，或后台运行
 ```
 

@@ -4,7 +4,7 @@
 >
 > 1. **只跟本文件推进**。像和 AI 聊天一样：问一点 → 推一点 → 验收 → 再下一步。
 > 2. **`markdown/` 是精读加餐**。study 说「精读打开 xxx」时再点开，不要两套主线并行通读。
-> 3. 工作目录固定：`F:\study\Code\shortlink`。入口命令：`go run .`
+> 3. 工作目录固定：`F:\study\Code\shortlink`。入口命令：`go run ./cmd/server`
 > 4. 相对链接示例：[01-cmd-server](./markdown/01-cmd-server.md)
 
 ---
@@ -33,7 +33,7 @@
 
 | 步骤 | 内容 | 跳转 |
 |------|------|------|
-| S0 | 开跑：Docker → go run → health | [S0](#s0-开跑) |
+| S0 | 开跑：Docker → `go run ./cmd/server` → health | [S0](#s0-开跑) |
 | S1 | 业务长什么样：三条 API + 请求路径图 | [S1](#s1-业务长什么样) |
 | S2 | 创建短链：handler → service → urlx → shortcode → repo | [S2](#s2-创建短链) |
 | S3 | 跳转 + 缓存：Cache Aside、302、X-Cache、异步点击 | [S3](#s3-跳转--缓存) |
@@ -105,17 +105,17 @@ study-redis   Up   ...   0.0.0.0:6379->6379/tcp
 
 ### 【我说】
 
-进项目目录，`go run .`，看到三行字就算服务活了。
+进项目目录，`go run ./cmd/server`，看到三行字就算服务活了。
 
 ### 【先懂】
 
-- 根目录 `main.go` 和 `cmd/server/main.go` 内容相同，都只调 `app.Run()`。
+- `cmd/server/main.go` 是唯一进程入口，只调 `app.Run()`。
 - `app.Run()` 依次：读配置 → 连 MySQL → AutoMigrate → 连 Redis → 组装 Gin → 监听端口。
 - 启动失败会以 `error` 返回，入口 `log.Fatal` 退出（非 0 退出码）。
 
 ### 【看哪里】
 
-- 入口：`main.go`、`cmd/server/main.go`
+- 入口：`cmd/server/main.go`
 - 启动全貌：`internal/app/app.go` 的 `Run()`
 - 精读：[01-cmd-server](./markdown/01-cmd-server.md)
 
@@ -124,7 +124,7 @@ study-redis   Up   ...   0.0.0.0:6379->6379/tcp
 ```powershell
 cd F:\study\Code\shortlink
 go mod tidy
-go run .
+go run ./cmd/server
 ```
 
 终端保持运行，不要关。
@@ -150,7 +150,7 @@ redis ok
 
 ### 【过关】
 
-口令：**「两个 main 都只调 app.Run，业务在 internal。」** —— 过了再进 S0.3。
+口令：**「cmd/server 只调 app.Run，业务在 internal。」** —— 过了再进 S0.3。
 
 ---
 
@@ -196,7 +196,7 @@ PowerShell 里 `Invoke-RestMethod` 可能直接显示 `status : ok`，等价。
 
 | 报错 | 修法 |
 |------|------|
-| `无法连接到远程服务器` | `go run .` 那窗口没跑、或端口不是 8080 |
+| `无法连接到远程服务器` | `go run ./cmd/server` 那窗口没跑、或端口不是 8080 |
 | `404` | 路径打错；应是 `/health` 不是 `/Health` |
 | PowerShell `curl` 行为怪异 | 用 `curl.exe`（真 curl）或 `Invoke-RestMethod` |
 
@@ -211,7 +211,7 @@ PowerShell 里 `Invoke-RestMethod` 可能直接显示 `status : ok`，等价。
 | 验收项 | 状态 |
 |--------|------|
 | Docker MySQL 3307、Redis 6379 运行中 | ☐ |
-| `go run .` 三行输出 | ☐ |
+| `go run ./cmd/server` 三行输出 | ☐ |
 | `/health` 返回 ok | ☐ |
 | 能解释为何 MySQL 用 3307 | ☐ |
 
@@ -1089,8 +1089,7 @@ docker exec -it study-mysql mysql -uroot -proot123 study `
 
 ```text
 shortlink/
-├── main.go                 # 兼容入口，调 app.Run
-├── cmd/server/main.go      # 规范入口，同上
+├── cmd/server/main.go      # 唯一进程入口，调 app.Run
 ├── configs/
 │   └── config.example.env  # 环境变量模板（Go 不自动读）
 ├── internal/
@@ -1198,7 +1197,7 @@ shortlink/
 | 困惑 | 澄清 |
 |------|------|
 | handler 能否调 repo？ | V1 不行；会破坏分层，以后改不动 |
-| 两个 main 要维护两份吗？ | 不用；逻辑全在 `app.Run` |
+| 入口要维护业务逻辑吗？ | 不用；`cmd/server` 只负责调用 `app.Run` |
 
 ### 【过关】
 
@@ -1283,7 +1282,7 @@ head -5 go.mod   # 或 Get-Content go.mod -Head 5
 # 终端 A：先 Ctrl+C 停掉旧服务
 $env:SHORTLINK_HTTP_ADDR=":9090"
 $env:SHORTLINK_BASE_URL="http://localhost:9090"
-go run .
+go run ./cmd/server
 
 # 终端 B
 Invoke-RestMethod http://localhost:9090/health
@@ -1353,7 +1352,7 @@ Remove-Item Env:SHORTLINK_BASE_URL -ErrorAction SilentlyContinue
 ```powershell
 docker start study-mysql study-redis
 cd F:\study\Code\shortlink
-go run .
+go run ./cmd/server
 # mysql ok / redis ok / :8080 is on
 Invoke-RestMethod http://localhost:8080/health
 ```
@@ -1395,7 +1394,7 @@ docker exec -it study-redis redis-cli GET "link:$c"
 | # | 项 | ☐ |
 |---|-----|---|
 | 1 | Docker MySQL **3307**、Redis **6379** 运行 | |
-| 2 | `go run .` 三行成功输出 | |
+| 2 | `go run ./cmd/server` 三行成功输出 | |
 | 3 | GET `/health` → ok | |
 | 4 | POST 合法 URL → **201** + 三字段 | |
 | 5 | POST 空/非法 URL → **400** | |
@@ -1580,7 +1579,7 @@ GET 解析 `service.Resolve`：先 Redis `link:code`；miss 则查 MySQL；查�
 # 环境
 docker start study-mysql study-redis
 cd F:\study\Code\shortlink
-go run .
+go run ./cmd/server
 
 # 健康检查
 Invoke-RestMethod http://localhost:8080/health
@@ -1626,7 +1625,7 @@ docker exec -it study-redis redis-cli GET "link:你的短码"
 
 | 源码 | 精读 |
 |------|------|
-| `main.go` / `cmd/server` | [01-cmd-server](./markdown/01-cmd-server.md) |
+| `cmd/server/main.go` | [01-cmd-server](./markdown/01-cmd-server.md) |
 | `internal/config` | [02-config](./markdown/02-config.md) |
 | `internal/app` | [03-app-wire](./markdown/03-app-wire.md) |
 | `internal/model` | [04-model-link](./markdown/04-model-link.md) |

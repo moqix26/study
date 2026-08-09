@@ -376,7 +376,7 @@ config.Load()
 ```powershell
 cd F:\study\Code\shortlink
 docker start study-mysql study-redis
-go run .
+go run ./cmd/server
 # 应看到 :8080 is on
 ```
 
@@ -385,7 +385,7 @@ go run .
 ```powershell
 $env:SHORTLINK_HTTP_ADDR=":9090"
 $env:SHORTLINK_BASE_URL="http://localhost:9090"
-go run .
+go run ./cmd/server
 # 终端应打印 :9090 is on
 
 curl.exe http://localhost:9090/health
@@ -395,7 +395,7 @@ curl.exe http://localhost:9090/health
 
 ```powershell
 $env:SHORTLINK_MYSQL_DSN="root:root123@tcp(127.0.0.1:3306)/study?charset=utf8mb4&parseTime=True&loc=Local"
-go run .
+go run ./cmd/server
 # 若本机 3306 没 MySQL：应 mysql: ... 错误退出
 ```
 
@@ -409,7 +409,7 @@ Remove-Item Env:SHORTLINK_MYSQL_DSN -ErrorAction SilentlyContinue
 
 ```powershell
 $env:SHORTLINK_CACHE_TTL="30s"
-go run .
+go run ./cmd/server
 # 创建短链并访问一次后：
 docker exec -it study-redis redis-cli TTL link:<你的短码>
 # 应接近 30（秒），不是 3600

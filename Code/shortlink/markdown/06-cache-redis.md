@@ -388,7 +388,7 @@ curl.exe -i http://localhost:8080/api/links/neverrr
 ```powershell
 docker stop study-redis
 # 若服务仍在跑，Get 报错应打日志，仍可从 MySQL 返回（若之前未重启过进程）
-# 新启动 go run . 会直接 redis Ping 失败退出——启动期与运行期策略不同
+# 新启动 go run ./cmd/server 会直接 redis Ping 失败退出——启动期与运行期策略不同
 docker start study-redis
 ```
 

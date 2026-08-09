@@ -252,7 +252,7 @@ CreateResult{ code, short_url, long_url }  // 不写 Redis
 
 ```powershell
 cd F:\study\Code\shortlink
-# 确保 mysql/redis 已启，go run .
+# 确保 mysql/redis 已启，go run ./cmd/server
 $r = Invoke-RestMethod -Uri http://localhost:8080/api/links -Method POST `
   -ContentType "application/json" -Body '{"url":"https://www.example.com"}'
 $r.code.Length   # 期望 6

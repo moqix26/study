@@ -3,7 +3,7 @@
 > **怎么用本目录**  
 > 1. **主线只跟** [`../study.md`](../study.md)（聊天式一步一步推）。  
 > 2. study 某一步说「精读打开 xxx」时，再进本目录。  
-> 3. 每篇都是 **`main.go.md` 同级详细度**：逐块代码 + 表格 + 为什么 + 坑 + 验收。  
+> 3. 每篇都按当前源码逐块讲解：代码 + 表格 + 为什么 + 坑 + 验收。
 > 4. 不要把本目录当第二套主线通读；会重复、也容易晕。
 
 ---
@@ -25,7 +25,7 @@
 
 | 文件 | 精讲对象 | 密度目标 |
 |------|----------|----------|
-| [01-cmd-server.md](./01-cmd-server.md) | 根 `main.go` + `cmd/server/main.go` | 入口级 |
+| [01-cmd-server.md](./01-cmd-server.md) | `cmd/server/main.go` | 入口级 |
 | [02-config.md](./02-config.md) | `internal/config` | 配置/DSN |
 | [03-app-wire.md](./03-app-wire.md) | `internal/app` 组装 | 接线 |
 | [04-model-link.md](./04-model-link.md) | `internal/model` | 表结构 |

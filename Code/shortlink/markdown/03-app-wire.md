@@ -10,7 +10,7 @@
 ## 0. `app` 包在整体里的位置
 
 ```text
-main.go
+cmd/server/main.go
   └─ app.Run()                    ← 本文（「接线员」）
        ├─ config.Load()
        ├─ gorm + repo + migrate
@@ -19,7 +19,7 @@ main.go
        └─ gin 引擎 + 路由 + r.Run
 ```
 
-入口 `main` 只有 3 行有效代码；**真正启动流程全在这里**。读懂 `Run()` = 读懂服务怎么拼起来。
+入口只有 3 行有效代码；**真正启动流程全在这里**。读懂 `Run()` = 读懂服务怎么拼起来。
 
 ---
 
@@ -331,7 +331,7 @@ r.Run(HTTPAddr) 阻塞
 
 | 调用方 | 调用 |
 |--------|------|
-| `main.go` / `cmd/server/main.go` | `app.Run()` |
+| `cmd/server/main.go` | `app.Run()` |
 
 ### 5.2 下游（一次 HTTP 请求）
 
@@ -383,7 +383,7 @@ GET /BaLrEf
 ```powershell
 cd F:\study\Code\shortlink
 docker start study-mysql study-redis
-go run .
+go run ./cmd/server
 ```
 
 期望输出（顺序大致如此）：
@@ -424,7 +424,7 @@ curl.exe -i http://localhost:8080/<code>
 
 ```powershell
 docker stop study-redis
-go run .
+go run ./cmd/server
 # 应无 redis ok，直接 redis: ... 错误
 docker start study-redis
 ```
