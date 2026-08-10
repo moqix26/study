@@ -19,7 +19,10 @@ import (
 
 // Run 组装依赖并启动 HTTP 服务。
 func Run() error {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
 
 	db, err := gorm.Open(mysql.Open(cfg.MySQLDSN), &gorm.Config{})
 	if err != nil {

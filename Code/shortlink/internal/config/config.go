@@ -1,61 +1,131 @@
 package config
 
 import (
+	"bufio"
+	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
-// Config 本地练习配置；可用环境变量覆盖，勿把生产密钥提交仓库。
+const configPath = "configs/config.env"
+
+// Config is loaded only from configs/config.env.
 type Config struct {
-	HTTPAddr    string
-	BaseURL     string
-	MySQLDSN    string
-	RedisAddr   string
-	CacheTTL    time.Duration
-	CodeLength  int
-	MaxRetries  int
+	HTTPAddr   string
+	BaseURL    string
+	MySQLDSN   string
+	RedisAddr  string
+	CacheTTL   time.Duration
+	CodeLength int
+	MaxRetries int
 }
 
-func Load() Config {
+func Load() (Config, error) {
+	values, err := loadConfigFile(configPath)
+	if err != nil {
+		return Config{}, err
+	}
+
+	httpAddr, err := requiredString(values, "SHORTLINK_HTTP_ADDR")
+	if err != nil {
+		return Config{}, err
+	}
+	baseURL, err := requiredString(values, "SHORTLINK_BASE_URL")
+	if err != nil {
+		return Config{}, err
+	}
+	mysqlDSN, err := requiredString(values, "SHORTLINK_MYSQL_DSN")
+	if err != nil {
+		return Config{}, err
+	}
+	redisAddr, err := requiredString(values, "SHORTLINK_REDIS_ADDR")
+	if err != nil {
+		return Config{}, err
+	}
+	cacheTTL, err := requiredDuration(values, "SHORTLINK_CACHE_TTL")
+	if err != nil {
+		return Config{}, err
+	}
+	codeLength, err := requiredPositiveInt(values, "SHORTLINK_CODE_LEN")
+	if err != nil {
+		return Config{}, err
+	}
+	maxRetries, err := requiredPositiveInt(values, "SHORTLINK_MAX_RETRIES")
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
-		HTTPAddr:   getenv("SHORTLINK_HTTP_ADDR", ":8080"),
-		BaseURL:    getenv("SHORTLINK_BASE_URL", "http://localhost:8080"),
-		MySQLDSN:   getenv("SHORTLINK_MYSQL_DSN", "root:root123@tcp(127.0.0.1:3307)/study?charset=utf8mb4&parseTime=True&loc=Local"),
-		RedisAddr:  getenv("SHORTLINK_REDIS_ADDR", "127.0.0.1:6379"),
-		CacheTTL:   durationEnv("SHORTLINK_CACHE_TTL", time.Hour),
-		CodeLength: intEnv("SHORTLINK_CODE_LEN", 6),
-		MaxRetries: intEnv("SHORTLINK_MAX_RETRIES", 8),
-	}
+		HTTPAddr:   httpAddr,
+		BaseURL:    baseURL,
+		MySQLDSN:   mysqlDSN,
+		RedisAddr:  redisAddr,
+		CacheTTL:   cacheTTL,
+		CodeLength: codeLength,
+		MaxRetries: maxRetries,
+	}, nil
 }
 
-func getenv(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
-}
-
-func intEnv(k string, def int) int {
-	v := os.Getenv(k)
-	if v == "" {
-		return def
-	}
-	n, err := strconv.Atoi(v)
+func loadConfigFile(path string) (map[string]string, error) {
+	f, err := os.Open(path)
 	if err != nil {
-		return def
+		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
-	return n
+	defer f.Close()
+
+	values := make(map[string]string)
+	scanner := bufio.NewScanner(f)
+	lineNumber := 0
+	for scanner.Scan() {
+		lineNumber++
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		key, value, ok := strings.Cut(line, "=")
+		key = strings.TrimSpace(key)
+		if !ok || key == "" {
+			return nil, fmt.Errorf("parse %s line %d: expected KEY=VALUE", path, lineNumber)
+		}
+		values[key] = strings.TrimSpace(value)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	return values, nil
 }
 
-func durationEnv(k string, def time.Duration) time.Duration {
-	v := os.Getenv(k)
-	if v == "" {
-		return def
+func requiredString(values map[string]string, key string) (string, error) {
+	value := values[key]
+	if value == "" {
+		return "", fmt.Errorf("config %s is required", key)
 	}
-	d, err := time.ParseDuration(v)
+	return value, nil
+}
+
+func requiredPositiveInt(values map[string]string, key string) (int, error) {
+	value, err := requiredString(values, key)
 	if err != nil {
-		return def
+		return 0, err
 	}
-	return d
+	n, err := strconv.Atoi(value)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("config %s must be a positive integer", key)
+	}
+	return n, nil
+}
+
+func requiredDuration(values map[string]string, key string) (time.Duration, error) {
+	value, err := requiredString(values, key)
+	if err != nil {
+		return 0, err
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return 0, fmt.Errorf("config %s must be a positive duration", key)
+	}
+	return duration, nil
 }

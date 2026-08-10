@@ -1,439 +1,164 @@
-# internal/config/config.go 逐块精讲
+# 配置文件 `configs/config.env`
 
-> 主线请跟 [`../study.md`](../study.md)；本文是精读加餐。
-
-> 对应源码：`internal/config/config.go`、`configs/config.example.env`  
-> 目标：搞清每个配置项干什么、环境变量怎么覆盖、DSN 每个字段什么意思。
+> 主线请跟 [`../study.md`](../study.md)；本文解释当前项目唯一的配置来源。
+>
+> 对应源码：`configs/config.env`、`internal/config/config.go`。
 
 ---
 
-## 0. 配置层在整体里的位置
+## 1. 配置从哪里来
+
+项目启动时只读取一个固定路径：
 
 ```text
-app.Run()
-  └─ cfg := config.Load()     ← 本文
-       ├─ HTTPAddr / BaseURL   → gin 监听、拼 short_url
-       ├─ MySQLDSN             → gorm.Open
-       ├─ RedisAddr            → redis.NewClient
-       ├─ CacheTTL             → LinkCache.Set 的过期时间
-       ├─ CodeLength           → 短码长度、Resolve 校验
-       └─ MaxRetries           → 创建时撞唯一索引重试次数
+configs/config.env
 ```
 
-**设计原则：** 本地练习用**合理默认值**直接能跑；上环境用**环境变量**覆盖，不把生产密码写进仓库。
-
----
-
-## 1. 完整源码
-
-```go
-package config
-
-import (
-	"os"
-	"strconv"
-	"time"
-)
-
-// Config 本地练习配置；可用环境变量覆盖，勿把生产密钥提交仓库。
-type Config struct {
-	HTTPAddr    string
-	BaseURL     string
-	MySQLDSN    string
-	RedisAddr   string
-	CacheTTL    time.Duration
-	CodeLength  int
-	MaxRetries  int
-}
-
-func Load() Config {
-	return Config{
-		HTTPAddr:   getenv("SHORTLINK_HTTP_ADDR", ":8080"),
-		BaseURL:    getenv("SHORTLINK_BASE_URL", "http://localhost:8080"),
-		MySQLDSN:   getenv("SHORTLINK_MYSQL_DSN", "root:root123@tcp(127.0.0.1:3307)/study?charset=utf8mb4&parseTime=True&loc=Local"),
-		RedisAddr:  getenv("SHORTLINK_REDIS_ADDR", "127.0.0.1:6379"),
-		CacheTTL:   durationEnv("SHORTLINK_CACHE_TTL", time.Hour),
-		CodeLength: intEnv("SHORTLINK_CODE_LEN", 6),
-		MaxRetries: intEnv("SHORTLINK_MAX_RETRIES", 8),
-	}
-}
-
-func getenv(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
-}
-
-func intEnv(k string, def int) int {
-	v := os.Getenv(k)
-	if v == "" {
-		return def
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		return def
-	}
-	return n
-}
-
-func durationEnv(k string, def time.Duration) time.Duration {
-	v := os.Getenv(k)
-	if v == "" {
-		return def
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return def
-	}
-	return d
-}
-```
-
----
-
-## 2. `package config` 与 `import`
-
-```go
-package config
-
-import (
-	"os"
-	"strconv"
-	"time"
-)
-```
-
-| 包 | 用途 |
-|----|------|
-| `os` | `os.Getenv` 读环境变量 |
-| `strconv` | `Atoi` 把字符串转成 `int` |
-| `time` | `Duration` 类型、`ParseDuration` 解析 `1h`、`30m` 等 |
-
-本包**不**依赖 Gin、GORM、Redis——纯配置，方便单测和复用。
-
----
-
-## 3. `Config` 结构体
-
-```go
-type Config struct {
-	HTTPAddr    string
-	BaseURL     string
-	MySQLDSN    string
-	RedisAddr   string
-	CacheTTL    time.Duration
-	CodeLength  int
-	MaxRetries  int
-}
-```
-
-| 字段 | 类型 | 默认值（环境变量） | 谁消费 | 干什么 |
-|------|------|-------------------|--------|--------|
-| `HTTPAddr` | `string` | `:8080`（`SHORTLINK_HTTP_ADDR`） | `app.Run` → `r.Run(cfg.HTTPAddr)` | HTTP 监听地址；`:8080` = 所有网卡 8080 |
-| `BaseURL` | `string` | `http://localhost:8080`（`SHORTLINK_BASE_URL`） | `LinkService.Create` / `ShortURL` | 拼返回 JSON 里的 `short_url` |
-| `MySQLDSN` | `string` | 见下文（`SHORTLINK_MYSQL_DSN`） | `gorm.Open(mysql.Open(...))` | MySQL 连接串 |
-| `RedisAddr` | `string` | `127.0.0.1:6379`（`SHORTLINK_REDIS_ADDR`） | `redis.Options{Addr: ...}` | Redis 地址:端口 |
-| `CacheTTL` | `time.Duration` | `1h`（`SHORTLINK_CACHE_TTL`） | `cache.NewLinkCache(..., ttl)` | Redis 缓存过期时间 |
-| `CodeLength` | `int` | `6`（`SHORTLINK_CODE_LEN`） | `shortcode.Random`、 `Resolve` 长度校验 | 短码字符个数 |
-| `MaxRetries` | `int` | `8`（`SHORTLINK_MAX_RETRIES`） | `LinkService.Create` 循环上限 | 短码碰撞时最多重试几次 |
-
-**为什么用结构体而不是全局变量？**
-
-- `Load()` 一次得到完整快照，可传给 `NewLinkService(cfg, ...)`，依赖清晰。
-- 测试时可构造假 `Config`，不必污染进程环境变量。
-
-**为什么注释写「勿把生产密钥提交仓库」？**
-
-- 默认值里的 `root:root123` 仅适合本机 Docker 练习。
-- 生产密码应走环境变量 / 密钥管理系统，**不要**写进 `config.go` 或提交 `.env`。
-
----
-
-## 4. `Load()` 函数
-
-```go
-func Load() Config {
-	return Config{
-		HTTPAddr:   getenv("SHORTLINK_HTTP_ADDR", ":8080"),
-		BaseURL:    getenv("SHORTLINK_BASE_URL", "http://localhost:8080"),
-		MySQLDSN:   getenv("SHORTLINK_MYSQL_DSN", "root:root123@tcp(127.0.0.1:3307)/study?charset=utf8mb4&parseTime=True&loc=Local"),
-		RedisAddr:  getenv("SHORTLINK_REDIS_ADDR", "127.0.0.1:6379"),
-		CacheTTL:   durationEnv("SHORTLINK_CACHE_TTL", time.Hour),
-		CodeLength: intEnv("SHORTLINK_CODE_LEN", 6),
-		MaxRetries: intEnv("SHORTLINK_MAX_RETRIES", 8),
-	}
-}
-```
-
-| 符号 | 含义 |
-|------|------|
-| `Load()` | 无参数；读环境变量 + 默认值，返回**值类型** `Config`（拷贝一份） |
-| `getenv` / `intEnv` / `durationEnv` | 三个小助手，统一「有环境变量用环境变量，否则默认」 |
-
-**为什么返回 `Config` 而不是 `*Config`？**
-
-- 结构体不大，值拷贝成本低。
-- 避免调用方误改共享指针；需要修改时显式传参。
-
-**环境变量命名约定：** 统一前缀 `SHORTLINK_`，避免和系统里别的 `HTTP_ADDR` 冲突。
-
----
-
-## 5. MySQL DSN 逐字段拆解
-
-默认 DSN：
+当前项目不读取 PowerShell、Docker 或系统环境变量，也没有代码默认值。配置文件缺失、缺字段或格式错误时，程序会在连接 MySQL 和 Redis 前直接退出。
 
 ```text
-root:root123@tcp(127.0.0.1:3307)/study?charset=utf8mb4&parseTime=True&loc=Local
+cmd/server/main.go
+  -> app.Run()
+  -> config.Load()
+  -> 读取 configs/config.env
+  -> 生成有类型的 Config
+  -> 连接 MySQL、Redis，启动 Gin
 ```
 
-Go MySQL 驱动（经 GORM）常见格式：
+## 2. 配置文件内容
 
-```text
-用户名:密码@tcp(主机:端口)/数据库名?参数1=值1&参数2=值2
-```
-
-| 片段 | 含义 | 为什么这样设 |
-|------|------|------------|
-| `root` | MySQL 用户名 | Docker 练习容器常用 root |
-| `root123` | 密码 | **仅本地**；勿提交真实生产密码 |
-| `@` | 分隔认证信息与网络地址 | 驱动解析约定 |
-| `tcp(...)` | 走 TCP 协议连接 | 本机连 Docker 映射端口 |
-| `127.0.0.1` | 主机 | 本机回环 |
-| `3307` | 端口 | 见下节「为何 3307」 |
-| `/study` | 数据库名 | **前面的 `/` 不能少** |
-| `charset=utf8mb4` | 字符集 | 支持 emoji、完整 Unicode |
-| `parseTime=True` | 解析时间列 | 让 GORM 把 `DATETIME` 映射成 `time.Time` |
-| `loc=Local` | 时区 | 与本地时间一致 |
-
-**常见 DSN 错误：**
-
-- 漏写 `/study` → 连不上或连错库
-- 密码含特殊字符未 URL 编码 → 认证失败
-- `parseTime=False` → `CreatedAt` 等时间字段行为异常
-
----
-
-## 6. 为何 MySQL 用 3307、Redis 用 6379？
-
-| 服务 | 默认端口 | 本项目配置 | 原因 |
-|------|----------|------------|------|
-| MySQL | 容器内 3306 | 宿主机 **3307** | 你本机若已装 MySQL 占 3306，Docker 把容器 3306 **映射**到宿主机 3307，避免端口冲突 |
-| Redis | 6379 | **6379** | Redis 官方默认端口；练习环境通常直接映射 6379:6379，本机无冲突就不改 |
-
-```text
-你的程序 ──tcp──► 127.0.0.1:3307 ──Docker 映射──► 容器内 MySQL:3306
-你的程序 ──tcp──► 127.0.0.1:6379 ──Docker 映射──► 容器内 Redis:6379
-```
-
-若你改了 Docker `-p` 映射，必须同步改 `SHORTLINK_MYSQL_DSN` / `SHORTLINK_REDIS_ADDR`。
-
----
-
-## 7. 三个 env 助手函数
-
-### 7.1 `getenv`
-
-```go
-func getenv(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
-}
-```
-
-| 参数/变量 | 含义 |
-|-----------|------|
-| `k` | 环境变量名，如 `SHORTLINK_HTTP_ADDR` |
-| `def` | 未设置或为空字符串时的默认值 |
-| `os.Getenv(k)` | 读环境变量；不存在返回 `""` |
-| `v != ""` | 空字符串视为「未配置」，仍用默认值 |
-
-**为何空字符串回退默认？** 避免误设 `SHORTLINK_HTTP_ADDR=` 导致监听地址非法；宁可显式不配。
-
-### 7.2 `intEnv`
-
-```go
-func intEnv(k string, def int) int {
-	v := os.Getenv(k)
-	if v == "" {
-		return def
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		return def
-	}
-	return n
-}
-```
-
-| 符号 | 含义 |
-|------|------|
-| `strconv.Atoi` | ASCII to int；`"6"` → `6` |
-| `err != nil` | 如设成 `SHORTLINK_CODE_LEN=abc`，**静默回退默认**，不 panic |
-
-**权衡：** 学习项目选择「坏值用默认」；生产可加日志或启动失败。
-
-### 7.3 `durationEnv`
-
-```go
-func durationEnv(k string, def time.Duration) time.Duration {
-	v := os.Getenv(k)
-	if v == "" {
-		return def
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return def
-	}
-	return d
-}
-```
-
-| 合法示例 | 含义 |
-|----------|------|
-| `1h` | 1 小时（代码里 `time.Hour` 的默认） |
-| `30m` | 30 分钟 |
-| `3600s` | 3600 秒 |
-
-`time.ParseDuration` 支持 `ns`、`us`、`µs`、`ms`、`s`、`m`、`h` 组合。
-
----
-
-## 8. `configs/config.example.env`
-
-仓库里的示例（全部注释掉，防止误加载）：
+[`../configs/config.env`](../configs/config.env) 使用简单的 `KEY=VALUE` 格式：
 
 ```env
-# SHORTLINK_HTTP_ADDR=:8080
-# SHORTLINK_BASE_URL=http://localhost:8080
-# SHORTLINK_MYSQL_DSN=root:root123@tcp(127.0.0.1:3307)/study?charset=utf8mb4&parseTime=True&loc=Local
-# SHORTLINK_REDIS_ADDR=127.0.0.1:6379
-# SHORTLINK_CACHE_TTL=1h
-# SHORTLINK_CODE_LEN=6
-# SHORTLINK_MAX_RETRIES=8
+SHORTLINK_HTTP_ADDR=:8080
+SHORTLINK_BASE_URL=http://localhost:8080
+SHORTLINK_MYSQL_DSN=root:root123@tcp(127.0.0.1:3307)/study?charset=utf8mb4&parseTime=True&loc=Local
+SHORTLINK_REDIS_ADDR=127.0.0.1:6379
+SHORTLINK_CACHE_TTL=1h
+SHORTLINK_CODE_LEN=6
+SHORTLINK_MAX_RETRIES=8
 ```
 
-| 要点 | 说明 |
+规则：
+
+| 写法 | 结果 |
 |------|------|
-| 文件名 `*.example.env` | 模板进 Git；真实 `.env` 应进 `.gitignore` |
-| 行首 `#` | 只是文本文件注释；**Go 不会自动读这个文件** |
-| 如何使用 | 复制为 `.env` 后，用工具 `source` / `dotenv` 注入环境变量，或在 PowerShell 里 `$env:SHORTLINK_HTTP_ADDR=":9090"` |
+| `KEY=VALUE` | 读取为一项配置 |
+| 空行 | 忽略 |
+| `# 注释` | 忽略 |
+| 少了 `=` | 启动失败，报告文件行号 |
+| 必填项没有值 | 启动失败，报告变量名 |
+| 数字或时长格式错误 | 启动失败，报告变量名 |
 
-**本项目的 `config.Load()` 只认 `os.Getenv`，不认 `.env` 文件本身。** 你需要自己把变量 export 到进程环境。
+## 3. 每一项的含义
 
----
+| 配置项 | 类型 | 作用 |
+|--------|------|------|
+| `SHORTLINK_HTTP_ADDR` | 字符串 | Gin 监听地址，例如 `:8080` |
+| `SHORTLINK_BASE_URL` | 字符串 | 创建短链时拼接 `short_url` 的前缀 |
+| `SHORTLINK_MYSQL_DSN` | 字符串 | MySQL 连接串 |
+| `SHORTLINK_REDIS_ADDR` | 字符串 | Redis 地址，例如 `127.0.0.1:6379` |
+| `SHORTLINK_CACHE_TTL` | `time.Duration` | Redis 缓存有效期，例如 `1h`、`30m` |
+| `SHORTLINK_CODE_LEN` | 正整数 | 随机短码长度 |
+| `SHORTLINK_MAX_RETRIES` | 正整数 | 短码碰撞时的最大重试次数 |
 
-## 9. 与上下游怎么接
+`SHORTLINK_HTTP_ADDR` 和 `SHORTLINK_BASE_URL` 要一起改。比如改到 9090：
 
-### 9.1 上游
+```env
+SHORTLINK_HTTP_ADDR=:9090
+SHORTLINK_BASE_URL=http://localhost:9090
+```
 
-| 谁 | 怎么影响配置 |
-|----|--------------|
-| 操作系统 / Shell | `export` / `$env:...` 设置环境变量 |
-| Docker Compose | `environment:` 段注入 |
-| K8s | `ConfigMap` / `Secret` 挂成 env |
-| 你 | 不设变量 → 用 `Load()` 内置默认值 |
+改完后重启：
 
-### 9.2 下游
+```powershell
+go run ./cmd/server
+```
+
+## 4. 为什么还需要 `Config` 结构体
+
+配置文件读出的都是字符串，但下游代码需要明确类型：
 
 ```text
-config.Load()
-  ├─► app.Run
-  │     ├─ cfg.MySQLDSN  → gorm.Open
-  │     ├─ cfg.RedisAddr → redis.NewClient
-  │     ├─ cfg.CacheTTL  → cache.NewLinkCache
-  │     └─ cfg.HTTPAddr  → r.Run
-  └─► service.NewLinkService(cfg, ...)
-        ├─ cfg.BaseURL / CodeLength / MaxRetries
-        └─ Resolve 用 cfg.CodeLength 校验路径参数长度
+"1h" -> time.Duration
+"6"  -> int
 ```
 
-`BaseURL` 与 `HTTPAddr` **可以不一致**（例如内网监听 `:8080`，对外 `BaseURL` 是 `https://s.example.com`）。本地练习两者通常都是 `localhost:8080`。
+因此 `config.Load()` 会把文件内容校验、转换后组装为：
 
----
+```go
+type Config struct {
+	HTTPAddr   string
+	BaseURL    string
+	MySQLDSN   string
+	RedisAddr  string
+	CacheTTL   time.Duration
+	CodeLength int
+	MaxRetries int
+}
+```
 
-## 10. 常见坑
+`app.Run()`、缓存和业务服务只使用这个结构体，不需要关心文件解析细节。
 
-| 坑 | 现象 | 修法 |
-|----|------|------|
-| 改了 `config.example.env` 但没 export | 服务仍用旧默认 | 环境变量要注入**进程**；改 example 文件 alone 无效 |
-| DSN 漏 `/study` | `Error 1049: Unknown database` | 检查 `/数据库名` |
-| 3306 vs 3307 搞混 | `connection refused` | 看 `docker ps` 端口映射 |
-| `BaseURL` 末尾多 `/` | `short_url` 变成 `http://x//abc` | `BaseURL` 不要尾斜杠；拼接在 service 里用 `BaseURL + "/" + code` |
-| `SHORTLINK_CODE_LEN` 与表字段不一致 | 6 位码能存，但以后改 8 位可能截断 | 模型 `gorm:"size:16"` 留余量；改长度要同步 service、校验逻辑 |
-| 把真实密码 commit | 泄露风险 | 只用 example；密码走 env / Secret |
-| `ParseDuration` 写成 `1 hour` | 解析失败，静默用默认 1h | 必须 `1h` 这种格式 |
+## 5. 启动失败示例
 
----
+如果把：
 
-## 11. 本地怎么验证
+```env
+SHORTLINK_CODE_LEN=abc
+```
 
-### 11.1 默认配置启动
+写进配置文件，启动会失败：
+
+```text
+config: config SHORTLINK_CODE_LEN must be a positive integer
+```
+
+如果删掉：
+
+```env
+SHORTLINK_REDIS_ADDR=127.0.0.1:6379
+```
+
+启动会失败：
+
+```text
+config: config SHORTLINK_REDIS_ADDR is required
+```
+
+这比静默回退到某个默认值更容易发现配置错误。
+
+## 6. 本地验收
 
 ```powershell
 cd F:\study\Code\shortlink
 docker start study-mysql study-redis
 go run ./cmd/server
-# 应看到 :8080 is on
 ```
 
-### 11.2 覆盖 HTTP 端口
+期望输出：
+
+```text
+mysql ok
+redis ok
+:8080 is on
+```
+
+再开一个终端：
 
 ```powershell
-$env:SHORTLINK_HTTP_ADDR=":9090"
-$env:SHORTLINK_BASE_URL="http://localhost:9090"
-go run ./cmd/server
-# 终端应打印 :9090 is on
-
-curl.exe http://localhost:9090/health
+Invoke-RestMethod http://localhost:8080/health
 ```
 
-### 11.3 验证 DSN（故意错端口）
+期望：
 
-```powershell
-$env:SHORTLINK_MYSQL_DSN="root:root123@tcp(127.0.0.1:3306)/study?charset=utf8mb4&parseTime=True&loc=Local"
-go run ./cmd/server
-# 若本机 3306 没 MySQL：应 mysql: ... 错误退出
+```json
+{"status":"ok"}
 ```
 
-改回 3307 或清掉变量：
+## 7. 口述检查
 
-```powershell
-Remove-Item Env:SHORTLINK_MYSQL_DSN -ErrorAction SilentlyContinue
-```
-
-### 11.4 验证 CacheTTL（需配合 Redis CLI）
-
-```powershell
-$env:SHORTLINK_CACHE_TTL="30s"
-go run ./cmd/server
-# 创建短链并访问一次后：
-docker exec -it study-redis redis-cli TTL link:<你的短码>
-# 应接近 30（秒），不是 3600
-```
-
-### 11.5 读配置的小技巧（临时 debug）
-
-在 `app.Run()` 里临时加一行（学完删掉）：
-
-```go
-fmt.Printf("%+v\n", cfg)
-```
-
-确认 env 是否生效。**不要**在生产日志里打印完整 DSN（含密码）。
-
----
-
-## 12. 口述检查（2～3 题）
-
-1. **`Load()` 没有读 `config.example.env`，那 example 文件有什么用？本地要怎么让 `SHORTLINK_HTTP_ADDR` 生效？**  
-   （期望：模板/documentation；PowerShell `$env:...` 或 dotenv 注入进程环境变量。）
-
-2. **把 DSN `root:root123@tcp(127.0.0.1:3307)/study?...` 拆开说：用户名、密码、主机、端口、库名、两个 query 参数各干什么？**  
-   （期望：能说出 3307 是宿主机映射、parseTime/loc/charset 的作用。）
-
-3. **`BaseURL` 和 `HTTPAddr` 有什么区别？如果服务跑在反向代理后面，你会改哪个？**  
-   （期望：前者拼对外短链 URL，后者是进程 bind 地址；对外域名改 BaseURL，监听可能仍是内网端口。）
+1. 当前项目启动时从哪里读取配置？
+2. `SHORTLINK_CACHE_TTL=1h` 为什么要转换成 `time.Duration`？
+3. 为什么配置文件缺字段时要拒绝启动？
+4. 改 HTTP 端口时，为什么还要一起改 `SHORTLINK_BASE_URL`？

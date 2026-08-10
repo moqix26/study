@@ -74,12 +74,12 @@ r.GET("/:code", h.Redirect)   // 最后
 r.Use(middleware.Logger())
 ```
 
-| 默认配置 | 值 | 环境变量 |
+| 配置项 | 值 | 来源 |
 | --- | --- | --- |
-| HTTP | `:8080` | `SHORTLINK_HTTP_ADDR` |
-| MySQL | `127.0.0.1:3307` / `study` | `SHORTLINK_MYSQL_DSN` |
-| Redis | `127.0.0.1:6379` | `SHORTLINK_REDIS_ADDR` |
-| 短码长 | 6 | `SHORTLINK_CODE_LEN` |
+| HTTP | `:8080` | `configs/config.env` |
+| MySQL | `127.0.0.1:3307` / `study` | `configs/config.env` |
+| Redis | `127.0.0.1:6379` | `configs/config.env` |
+| 短码长 | 6 | `configs/config.env` |
 | 缓存 TTL | 1h | `SHORTLINK_CACHE_TTL` |
 
 ---

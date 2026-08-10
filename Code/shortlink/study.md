@@ -37,7 +37,7 @@
 | S1 | 业务长什么样：三条 API + 请求路径图 | [S1](#s1-业务长什么样) |
 | S2 | 创建短链：handler → service → urlx → shortcode → repo | [S2](#s2-创建短链) |
 | S3 | 跳转 + 缓存：Cache Aside、302、X-Cache、异步点击 | [S3](#s3-跳转--缓存) |
-| S4 | 分层与配置：目录职责、依赖方向、环境变量 | [S4](#s4-分层与配置) |
+| S4 | 分层与配置：目录职责、依赖方向、配置文件 | [S4](#s4-分层与配置) |
 | S5 | 验收 + 口述 + V1 不做 | [S5](#s5-验收--口述--以后不做) |
 
 精读索引：[markdown/00-index.md](./markdown/00-index.md)
@@ -93,7 +93,7 @@ study-redis   Up   ...   0.0.0.0:6379->6379/tcp
 |------|------|
 | `No such container: study-mysql` | 容器还没创建，先按你环境文档 `docker run` 建好 |
 | `Cannot connect to the Docker daemon` | 打开 Docker Desktop，等托盘图标就绪 |
-| 端口被占用 | `docker ps` 看谁占了 3307/6379；停冲突进程或改映射后同步改环境变量 |
+| 端口被占用 | `docker ps` 看谁占了 3307/6379；停冲突进程或改映射后同步改 `configs/config.env` |
 
 ### 【过关】
 
@@ -491,7 +491,7 @@ try {
 
 - 字母表：base62（`0-9a-zA-Z`），共 62 个字符。
 - 用 `crypto/rand`（密码学安全），不是 `math/rand`。
-- 默认长度 `CodeLength = 6`（环境变量 `SHORTLINK_CODE_LEN`）。
+- 默认长度 `CodeLength = 6`（配置文件 `SHORTLINK_CODE_LEN`）。
 - 模型字段 `Code` 的 gorm tag 是 `size:16`，留余量。
 
 ### 【看哪里】
@@ -652,7 +652,7 @@ curl.exe -s -w "`nHTTP %{http_code}`n" -X POST http://localhost:8080/api/links `
 | 报错 | 修法 |
 |------|------|
 | PowerShell curl 转义问题 | 用 `Invoke-RestMethod` 或 `curl.exe` 注意 JSON 引号 |
-| 201 但 short_url 不对 | 检查 `SHORTLINK_BASE_URL` 环境变量 |
+| 201 但 short_url 不对 | 检查 `configs/config.env` 中的 `SHORTLINK_BASE_URL` |
 
 ### 【过关】
 
@@ -1052,7 +1052,7 @@ docker exec -it study-mysql mysql -uroot -proot123 study `
 | 现象 | 修法 |
 |------|------|
 | 日志没有 X-Cache | 看 [11-middleware-logger](./markdown/11-middleware-logger.md)；404 请求可能无缓存头 |
-| HIT 但 Redis 无 key | 可能刚被 TTL 过期；等 TTL 或查 `SHORTLINK_CACHE_TTL` |
+| HIT 但 Redis 无 key | 可能刚被 TTL 过期；等 TTL 或查配置文件中的 `SHORTLINK_CACHE_TTL` |
 
 ### 【过关】
 
@@ -1074,7 +1074,7 @@ docker exec -it study-mysql mysql -uroot -proot123 study `
 
 # S4 · 分层与配置
 
-> 本步目标：指着目录说职责，说清依赖方向与环境变量覆盖。  
+> 本步目标：指着目录说职责，说清依赖方向与配置文件。
 > 精读：[03-app-wire](./markdown/03-app-wire.md) · [02-config](./markdown/02-config.md)
 
 ---
@@ -1091,10 +1091,10 @@ docker exec -it study-mysql mysql -uroot -proot123 study `
 shortlink/
 ├── cmd/server/main.go      # 唯一进程入口，调 app.Run
 ├── configs/
-│   └── config.example.env  # 环境变量模板（Go 不自动读）
+│   └── config.env          # 启动时读取的本地配置
 ├── internal/
 │   ├── app/app.go          # 组装：配置、DB、Redis、路由
-│   ├── config/config.go    # Load() 与环境变量
+│   ├── config/config.go    # Load() 与配置文件解析
 │   ├── handler/http.go     # HTTP 入出站、状态码
 │   ├── service/link.go     # 业务编排：Create、Resolve
 │   ├── repo/link.go        # MySQL CRUD
@@ -1123,7 +1123,7 @@ shortlink/
 | service | 业务逻辑、编排 repo/cache | 绑定 Gin Context |
 | repo | MySQL 读写 | 知道 HTTP 状态码 |
 | cache | Redis 读写 | 业务判断 |
-| config | 读环境变量 | 连数据库 |
+| config | 读取和校验配置文件 | 连数据库 |
 
 ### 【怎么验收】
 
@@ -1248,15 +1248,15 @@ head -5 go.mod   # 或 Get-Content go.mod -Head 5
 
 ---
 
-## S4.4 环境变量与 config.example.env
+## S4.4 配置文件
 
 ### 【我说】
 
-默认值能本地跑；上环境用环境变量覆盖。`config.example.env` 只是模板，Go 不会自动读文件。
+启动时只读取 `configs/config.env`。所有配置项都必须写在文件里。
 
 ### 【先懂】
 
-| 环境变量 | 默认值 | 作用 |
+| 配置项 | 当前值 | 作用 |
 |----------|--------|------|
 | `SHORTLINK_HTTP_ADDR` | `:8080` | 监听地址 |
 | `SHORTLINK_BASE_URL` | `http://localhost:8080` | 拼 short_url |
@@ -1266,49 +1266,47 @@ head -5 go.mod   # 或 Get-Content go.mod -Head 5
 | `SHORTLINK_CODE_LEN` | `6` | 短码长度 |
 | `SHORTLINK_MAX_RETRIES` | `8` | 碰撞重试上限 |
 
-`Load()` 用 `os.Getenv`；空字符串或非法值回退默认（`intEnv`/`durationEnv`）。
+`Load()` 解析 `config.env` 后把字符串转换为配置结构体。缺字段、空值、非法整数或非法时长都会使启动失败。
 
 ### 【看哪里】
 
 - `internal/config/config.go`
-- `configs/config.example.env`
+- `configs/config.env`
 - 精读：[02-config](./markdown/02-config.md)
 
 ### 【你做什么】
 
-换端口实验（需重启服务）：
+换端口实验（需改文件并重启服务）：
 
 ```powershell
-# 终端 A：先 Ctrl+C 停掉旧服务
-$env:SHORTLINK_HTTP_ADDR=":9090"
-$env:SHORTLINK_BASE_URL="http://localhost:9090"
+# 先在 configs/config.env 中改成：
+# SHORTLINK_HTTP_ADDR=:9090
+# SHORTLINK_BASE_URL=http://localhost:9090
 go run ./cmd/server
 
 # 终端 B
 Invoke-RestMethod http://localhost:9090/health
 
-# 恢复
-Remove-Item Env:SHORTLINK_HTTP_ADDR -ErrorAction SilentlyContinue
-Remove-Item Env:SHORTLINK_BASE_URL -ErrorAction SilentlyContinue
+# 实验结束后，把 config.env 中两个值改回 8080
 ```
 
 ### 【怎么验收】
 
 - 服务打印 `:9090 is on`
 - `/health` 在 9090 可访问
-- 能说出：**改 example.env 不生效，必须注入进程环境变量**
+- 能说出：**改 config.env 后重启会生效；缺字段或格式错误会拒绝启动**
 
 ### 【卡了】
 
 | 现象 | 修法 |
 |------|------|
-| 改了 env 仍 8080 | 没重启进程；或变量名拼错 |
+| 改了 config.env 仍 8080 | 没重启进程；或配置项名拼错 |
 | short_url 端口不对 | 只改了 HTTP_ADDR 没改 BASE_URL |
 | `ParseDuration` 失败 | 应写 `1h` 不是 `1 hour` |
 
 ### 【过关】
 
-口令：**「Load 只认环境变量；example.env 是文档模板。」** —— S4 完成，进 S5。
+口令：**「Load 只读 config.env；配置错误就拒绝启动。」** —— S4 完成，进 S5。
 
 ---
 
@@ -1319,7 +1317,7 @@ Remove-Item Env:SHORTLINK_BASE_URL -ErrorAction SilentlyContinue
 | 能说出各 internal 包职责 | ☐ |
 | 能画 handler→service→repo/cache | ☐ |
 | 能解释独立 go.mod | ☐ |
-| 会用环境变量覆盖端口 | ☐ |
+| 会修改 config.env 中的端口 | ☐ |
 
 ---
 
@@ -1413,7 +1411,7 @@ docker exec -it study-redis redis-cli GET "link:$c"
 | 2～3 | S0 |
 | 4～5 | S2 |
 | 6～10 | S3 |
-| 环境变量/端口 | S4 |
+| 配置文件/端口 | S4 |
 
 ### 【过关】
 
@@ -1457,7 +1455,7 @@ GET 解析 `service.Resolve`：先 Redis `link:code`；miss 则查 MySQL；查�
 找不到记录：`Resolve` 返回空串，handler 回 **404**，不是 500。
 
 **5. 配置与部署（20 秒）**  
-`config.Load` 读环境变量，前缀 `SHORTLINK_`。MySQL 宿主机 **3307**（Docker 映射），Redis **6379**。`config.example.env` 是模板。
+`config.Load` 只读取 `configs/config.env`。MySQL 宿主机 **3307**（Docker 映射），Redis **6379**。
 
 **6. V1 不做什么 + 以后（25 秒）**  
 未做：JWT 登录、限流、缓存穿透空值、K8s。以后可加：用户体系、布隆过滤器、监控、分库分表。
@@ -1617,7 +1615,7 @@ docker exec -it study-redis redis-cli GET "link:你的短码"
 | 创建响应 | **201** + `code` / `short_url` / `long_url` |
 | 跳转 | **302** Found |
 | 创建写缓存吗 | **不写** |
-| 环境变量前缀 | `SHORTLINK_` |
+| 配置文件 | `configs/config.env` |
 
 ---
 

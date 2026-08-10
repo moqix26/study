@@ -119,7 +119,7 @@ curl.exe http://localhost:8080/health
 | `mysql: ... connection refused` | MySQL 没启动，或 DSN 端口不是 3307 |
 | `redis: ... connection refused` | Redis 没启动，或地址不是 6379 |
 | `migrate: ...` | 数据库 `study` 不存在或连接配置错误 |
-| 改环境变量后仍监听 8080 | 环境变量只在启动时读取，需要重启服务 |
+| 改 config.env 后仍监听 8080 | 配置只在启动时读取，需要重启服务 |
 
 ## 6. 与历史单文件代码的关系
 

@@ -9,7 +9,7 @@ shortlink/
 ├── cmd/server/          # 推荐入口
 ├── internal/
 │   ├── app/             # 依赖组装 + 启动
-│   ├── config/          # 环境变量配置
+│   ├── config/          # 配置文件读取
 │   ├── model/           # GORM 模型
 │   ├── repo/            # MySQL
 │   ├── cache/           # Redis
@@ -64,4 +64,4 @@ curl.exe -i http://localhost:8080/api/links/<code>
 
 ## 说明
 
-- 练习密码写在默认配置里，**不要用于生产**；可用环境变量覆盖，见 `configs/config.example.env`。
+- 启动时只读取 `configs/config.env`。该文件必须包含全部配置项；缺字段或格式错误会使启动失败。
