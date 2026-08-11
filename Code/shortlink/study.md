@@ -491,7 +491,7 @@ try {
 
 - 字母表：base62（`0-9a-zA-Z`），共 62 个字符。
 - 用 `crypto/rand`（密码学安全），不是 `math/rand`。
-- 默认长度 `CodeLength = 6`（配置文件 `SHORTLINK_CODE_LEN`）。
+- 默认长度 `CodeLength = 6`（配置文件 `CODE_LEN`）。
 - 模型字段 `Code` 的 gorm tag 是 `size:16`，留余量。
 
 ### 【看哪里】
@@ -652,7 +652,7 @@ curl.exe -s -w "`nHTTP %{http_code}`n" -X POST http://localhost:8080/api/links `
 | 报错 | 修法 |
 |------|------|
 | PowerShell curl 转义问题 | 用 `Invoke-RestMethod` 或 `curl.exe` 注意 JSON 引号 |
-| 201 但 short_url 不对 | 检查 `configs/config.env` 中的 `SHORTLINK_BASE_URL` |
+| 201 但 short_url 不对 | 检查 `configs/config.env` 中的 `BASE_URL` |
 
 ### 【过关】
 
@@ -1052,7 +1052,7 @@ docker exec -it study-mysql mysql -uroot -proot123 study `
 | 现象 | 修法 |
 |------|------|
 | 日志没有 X-Cache | 看 [11-middleware-logger](./markdown/11-middleware-logger.md)；404 请求可能无缓存头 |
-| HIT 但 Redis 无 key | 可能刚被 TTL 过期；等 TTL 或查配置文件中的 `SHORTLINK_CACHE_TTL` |
+| HIT 但 Redis 无 key | 可能刚被 TTL 过期；等 TTL 或查配置文件中的 `CACHE_TTL` |
 
 ### 【过关】
 
@@ -1258,13 +1258,13 @@ head -5 go.mod   # 或 Get-Content go.mod -Head 5
 
 | 配置项 | 当前值 | 作用 |
 |----------|--------|------|
-| `SHORTLINK_HTTP_ADDR` | `:8080` | 监听地址 |
-| `SHORTLINK_BASE_URL` | `http://localhost:8080` | 拼 short_url |
-| `SHORTLINK_MYSQL_DSN` | `root:root123@tcp(127.0.0.1:3307)/study?...` | MySQL |
-| `SHORTLINK_REDIS_ADDR` | `127.0.0.1:6379` | Redis |
-| `SHORTLINK_CACHE_TTL` | `1h` | 缓存过期 |
-| `SHORTLINK_CODE_LEN` | `6` | 短码长度 |
-| `SHORTLINK_MAX_RETRIES` | `8` | 碰撞重试上限 |
+| `HTTP_ADDR` | `:8080` | 监听地址 |
+| `BASE_URL` | `http://localhost:8080` | 拼 short_url |
+| `MYSQL_DSN` | `root:root123@tcp(127.0.0.1:3307)/study?...` | MySQL |
+| `REDIS_ADDR` | `127.0.0.1:6379` | Redis |
+| `CACHE_TTL` | `1h` | 缓存过期 |
+| `CODE_LEN` | `6` | 短码长度 |
+| `MAX_RETRIES` | `8` | 碰撞重试上限 |
 
 `Load()` 解析 `config.env` 后把字符串转换为配置结构体。缺字段、空值、非法整数或非法时长都会使启动失败。
 
@@ -1280,8 +1280,8 @@ head -5 go.mod   # 或 Get-Content go.mod -Head 5
 
 ```powershell
 # 先在 configs/config.env 中改成：
-# SHORTLINK_HTTP_ADDR=:9090
-# SHORTLINK_BASE_URL=http://localhost:9090
+# HTTP_ADDR=:9090
+# BASE_URL=http://localhost:9090
 go run ./cmd/server
 
 # 终端 B

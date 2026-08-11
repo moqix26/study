@@ -103,7 +103,7 @@ func NewLinkCache(rdb *redis.Client, ttl time.Duration) *LinkCache {
 
 **为何 ttl 放在 struct 而不是每次 `Set` 传参？**
 
-- 全项目统一缓存策略；改 `SHORTLINK_CACHE_TTL` 一处生效。
+- 全项目统一缓存策略；改 `CACHE_TTL` 一处生效。
 - `Set` 签名更短；若以后按链接等级不同 TTL 再扩展不迟。
 
 ---
@@ -360,7 +360,7 @@ curl.exe -i http://localhost:8080/api/links/$code
 ```powershell
 docker exec -it study-redis redis-cli GET link:$code
 docker exec -it study-redis redis-cli TTL link:$code
-# TTL 应接近 3600（默认 1h）或你设的 SHORTLINK_CACHE_TTL
+# TTL 应接近 3600（默认 1h）或你设的 CACHE_TTL
 ```
 
 ### 12.3 模拟 miss（删 key）

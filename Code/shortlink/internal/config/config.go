@@ -28,31 +28,31 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	httpAddr, err := requiredString(values, "SHORTLINK_HTTP_ADDR")
+	httpAddr, err := requiredString(values, "HTTP_ADDR")
 	if err != nil {
 		return Config{}, err
 	}
-	baseURL, err := requiredString(values, "SHORTLINK_BASE_URL")
+	baseURL, err := requiredString(values, "BASE_URL")
 	if err != nil {
 		return Config{}, err
 	}
-	mysqlDSN, err := requiredString(values, "SHORTLINK_MYSQL_DSN")
+	mysqlDSN, err := requiredString(values, "MYSQL_DSN")
 	if err != nil {
 		return Config{}, err
 	}
-	redisAddr, err := requiredString(values, "SHORTLINK_REDIS_ADDR")
+	redisAddr, err := requiredString(values, "REDIS_ADDR")
 	if err != nil {
 		return Config{}, err
 	}
-	cacheTTL, err := requiredDuration(values, "SHORTLINK_CACHE_TTL")
+	cacheTTL, err := requiredDuration(values, "CACHE_TTL")
 	if err != nil {
 		return Config{}, err
 	}
-	codeLength, err := requiredPositiveInt(values, "SHORTLINK_CODE_LEN")
+	codeLength, err := requiredPositiveInt(values, "CODE_LEN")
 	if err != nil {
 		return Config{}, err
 	}
-	maxRetries, err := requiredPositiveInt(values, "SHORTLINK_MAX_RETRIES")
+	maxRetries, err := requiredPositiveInt(values, "MAX_RETRIES")
 	if err != nil {
 		return Config{}, err
 	}

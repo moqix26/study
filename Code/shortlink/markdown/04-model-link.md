@@ -113,7 +113,7 @@ Code string `json:"code" gorm:"size:16;uniqueIndex;not null"`
 
 | 概念 | 值 | 说明 |
 |------|-----|------|
-| 运行时生成的短码长度 | **6**（`SHORTLINK_CODE_LEN` / `config.CodeLength`） | `shortcode.Random(6)`、`Resolve` 里 `len(code)!=6` 直接当不存在 |
+| 运行时生成的短码长度 | **6**（`CODE_LEN` / `config.CodeLength`） | `shortcode.Random(6)`、`Resolve` 里 `len(code)!=6` 直接当不存在 |
 | 数据库列上限 | **16**（`gorm:"size:16"`） | 列比当前业务码**更长**，留扩展空间 |
 
 ```text

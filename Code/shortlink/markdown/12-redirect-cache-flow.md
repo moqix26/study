@@ -80,7 +80,7 @@ r.Use(middleware.Logger())
 | MySQL | `127.0.0.1:3307` / `study` | `configs/config.env` |
 | Redis | `127.0.0.1:6379` | `configs/config.env` |
 | 短码长 | 6 | `configs/config.env` |
-| 缓存 TTL | 1h | `SHORTLINK_CACHE_TTL` |
+| 缓存 TTL | 1h | `CACHE_TTL` |
 
 ---
 
@@ -469,7 +469,7 @@ curl.exe -i -X POST http://localhost:8080/api/links `
 | 本仓库默认 | Docker `study-mysql` 映射 **宿主机 3307 → 容器 3306** |
 
 ```text
-SHORTLINK_MYSQL_DSN=root:root123@tcp(127.0.0.1:3307)/study?...
+MYSQL_DSN=root:root123@tcp(127.0.0.1:3307)/study?...
 ```
 
 若你连 3306 而映射是 3307，启动即失败。

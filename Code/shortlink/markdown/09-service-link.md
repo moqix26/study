@@ -235,7 +235,7 @@ return nil, errors.New("failed to allocate code")
 | 非 duplicate 错误 | 连接断开、字段过长等 → 直接失败 |
 | 循环耗尽 | `"failed to allocate code"` → handler 500 |
 
-**配置**：`MaxRetries` 从 `configs/config.env` 的 `SHORTLINK_MAX_RETRIES` 读取。
+**配置**：`MaxRetries` 从 `configs/config.env` 的 `MAX_RETRIES` 读取。
 
 ### 5.3 创建路径数据流
 

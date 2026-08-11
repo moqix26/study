@@ -264,7 +264,7 @@ $r.code -match '^[0-9a-zA-Z]{6}$'   # 期望 True
 
 | 检查项 | 期望 |
 | --- | --- |
-| `code` 长度 | 与 `SHORTLINK_CODE_LEN` 一致（默认 6） |
+| `code` 长度 | 与 `CODE_LEN` 一致（默认 6） |
 | 字符集 | 仅 `0-9a-zA-Z` |
 | 多次创建 | `code` 不同（极高概率） |
 | HTTP 状态 | `201 Created` |
